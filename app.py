@@ -23,9 +23,12 @@ st.sidebar.header("Configuración")
 uploaded_file = st.sidebar.file_uploader("Carga tu archivo clientes.csv", type="csv")
 
 if uploaded_file:
-    # Leer el CSV detectando separador y limpiando espacios en blanco en los nombres de columnas
-    df = pd.read_csv(uploaded_file, sep=None, engine='python')
-    df.columns = df.columns.str.strip()
+    # LEER EL CSV: utf-8-sig elimina caracteres invisibles (BOM) al inicio del archivo
+    # sep=None con engine='python' detecta si es coma o punto y coma
+    df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8-sig')
+    
+    # Limpiamos espacios en blanco en los nombres de las columnas
+    df.columns = df.columns.str.strip().str.lower()
     
     st.write(f"### Lista de Contactos ({len(df)} registros)")
 
@@ -65,7 +68,7 @@ if uploaded_file:
                             st.error(f"Error al llamar: {e}")
                 st.divider()
         except KeyError as e:
-            st.error(f"Falta la columna: {e}. Revisa que el CSV tenga: nombre, codigo_pais, telefono")
+            st.error(f"Error: No se encontró la columna {e}. Columnas detectadas: {list(df.columns)}")
             break
 else:
     st.warning("👈 Por favor, carga un archivo CSV con columnas: nombre, codigo_pais, telefono.")
