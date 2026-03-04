@@ -23,43 +23,49 @@ st.sidebar.header("Configuración")
 uploaded_file = st.sidebar.file_uploader("Carga tu archivo clientes.csv", type="csv")
 
 if uploaded_file:
-    # Leer el CSV con las nuevas columnas
-    df = pd.read_csv(uploaded_file)
+    # Leer el CSV detectando separador y limpiando espacios en blanco en los nombres de columnas
+    df = pd.read_csv(uploaded_file, sep=None, engine='python')
+    df.columns = df.columns.str.strip()
     
     st.write(f"### Lista de Contactos ({len(df)} registros)")
 
     # Mostrar la interfaz de llamadas
     for index, row in df.iterrows():
-        # --- LÓGICA DE UNIÓN Y LIMPIEZA ---
-        pais = str(row['codigo_pais']).strip()
-        tel = str(row['telefono']).strip()
-        
-        # Agregamos el '+' si no existe
-        if not pais.startswith('+'):
-            pais = f"+{pais}"
+        try:
+            # --- LÓGICA DE UNIÓN Y LIMPIEZA ---
+            pais = str(row['codigo_pais']).strip()
+            tel = str(row['telefono']).strip()
+            nombre = str(row['nombre']).strip()
             
-        numero_completo = f"{pais}{tel}"
-        # ---------------------------------
+            # Agregamos el '+' si no existe
+            if not pais.startswith('+'):
+                pais = f"+{pais}"
+                
+            numero_completo = f"{pais}{tel}"
+            # ---------------------------------
 
-        with st.container():
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"**👤 {row['nombre']}**")
-                st.caption(f"📞 {numero_completo}")
-            with col2:
-                if st.button("Llamar", key=f"btn_{index}", use_container_width=True):
-                    try:
-                        call = client.calls.create(
-                            url=function_url,
-                            to=numero_completo,
-                            from_=twilio_number,
-                            record=True,
-                            machine_detection='Enable'
-                        )
-                        st.success(f"Llamada iniciada")
-                        st.toast(f"SID: {call.sid}")
-                    except Exception as e:
-                        st.error(f"Error al llamar: {e}")
-            st.divider()
+            with st.container():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**👤 {nombre}**")
+                    st.caption(f"📞 {numero_completo}")
+                with col2:
+                    if st.button("Llamar", key=f"btn_{index}", use_container_width=True):
+                        try:
+                            call = client.calls.create(
+                                url=function_url,
+                                to=numero_completo,
+                                from_=twilio_number,
+                                record=True,
+                                machine_detection='Enable'
+                            )
+                            st.success(f"Llamada iniciada")
+                            st.toast(f"SID: {call.sid}")
+                        except Exception as e:
+                            st.error(f"Error al llamar: {e}")
+                st.divider()
+        except KeyError as e:
+            st.error(f"Falta la columna: {e}. Revisa que el CSV tenga: nombre, codigo_pais, telefono")
+            break
 else:
     st.warning("👈 Por favor, carga un archivo CSV con columnas: nombre, codigo_pais, telefono.")
