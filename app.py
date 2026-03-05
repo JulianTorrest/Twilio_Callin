@@ -15,7 +15,6 @@ try:
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     
-    # Lista de cédulas autorizadas (Asegúrate de que coincidan con las de tus agentes)
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"] 
     
     client = Client(account_sid, auth_token)
@@ -23,16 +22,13 @@ except KeyError:
     st.error("⚠️ Configura los Secrets (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FUNCTION_URL, MS_FORMS_URL) en Streamlit Cloud.")
     st.stop()
 
-# --- 2. CONTROL DE ACCESO (CORREGIDO PARA EVITAR ERRORES DE VALIDACIÓN) ---
+# --- 2. CONTROL DE ACCESO ---
 if 'agente_id' not in st.session_state:
     st.title("🔐 Acceso al Sistema de Llamadas")
-    # .strip() elimina espacios accidentales que el usuario o el navegador puedan insertar
     cedula_input = st.text_input("Ingrese su número de cédula:", type="password").strip()
     
     if st.button("Ingresar"):
-        # Convertimos toda la lista a string y quitamos espacios para una comparación exacta
         lista_limpia = [str(c).strip() for c in CEDULAS_AUTORIZADAS]
-        
         if cedula_input in lista_limpia:
             st.session_state.agente_id = cedula_input
             st.success(f"✅ Bienvenido, Agente {cedula_input}")
@@ -89,17 +85,19 @@ if st.session_state.df_contactos is not None:
     df_actual = st.session_state.df_contactos
     pendientes = df_actual[df_actual['estado'] == 'Pendiente']
     realizadas = df_actual[df_actual['estado'] == 'Llamado']
+    no_contestados = df_actual[df_actual['estado'] == 'No Contesto']
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Pendientes", len(pendientes))
     c2.metric("Realizadas", len(realizadas))
-    c3.metric("Track Espejo", len(st.session_state.df_historico_incremental))
+    c3.metric("No Contesto", len(no_contestados))
+    c4.metric("Track Espejo", len(st.session_state.df_historico_incremental))
 
     # --- DESCARGAS EN BARRA LATERAL ---
     st.sidebar.header("2. Descargar Reportes")
-    if not realizadas.empty:
-        csv_real = realizadas.to_csv(index=False).encode('utf-8-sig')
-        st.sidebar.download_button("✅ Reporte Llamadas (CSV)", csv_real, "reporte_llamadas.csv")
+    if not realizadas.empty or not no_contestados.empty:
+        csv_real = df_actual[df_actual['estado'] != 'Pendiente'].to_csv(index=False).encode('utf-8-sig')
+        st.sidebar.download_button("✅ Reporte Consolidado (CSV)", csv_real, "reporte_gestion.csv")
     
     if not st.session_state.df_historico_incremental.empty:
         csv_espejo = st.session_state.df_historico_incremental.to_csv(index=False).encode('utf-8-sig')
@@ -143,34 +141,49 @@ if st.session_state.df_contactos is not None:
                             st.error(f"Error Twilio: {e}")
                 
                 else:
-                    st.write("### 🔴 Estado: EN LLAMADA")
+                    # --- MEJORA: MONITOREO DE ESTADO ---
+                    try:
+                        # Consultamos el estado real en Twilio
+                        remote_call = client.calls(st.session_state.llamada_activa_sid).fetch()
+                        current_status = remote_call.status
+                    except Exception:
+                        current_status = "unknown"
+
+                    st.write(f"### 🔴 Estado: {current_status.upper()}")
+
+                    # Si el usuario NO contestó o la llamada terminó sola
+                    if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
+                        st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
+                        st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: Llamada {current_status}"
+                        
+                        # Guardar en Track Espejo
+                        registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
+                        st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
+                        
+                        st.session_state.llamada_activa_sid = None
+                        st.warning(f"La llamada terminó ({current_status}). Pasando al siguiente...")
+                        time.sleep(2)
+                        st.rerun()
+
+                    # Interfaz normal de llamada activa
                     id_call = st.session_state.llamada_activa_sid
                     link_forms = f"{forms_base_url}?id_llamada={id_call}&cliente={proximo['nombre']}&agente={st.session_state.agente_id}"
-                    
                     st.markdown(f"### [📝 LLENAR FORMULARIO]({link_forms})")
                     
                     if st.button("⏹️ FINALIZAR LLAMADA", key="btn_hangup", use_container_width=True, type="secondary"):
                         try:
-                            # 1. Calcular Duración
                             t_fin = datetime.now()
                             duracion_seg = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
-                            
-                            # 2. Cortar en Twilio
                             client.calls(id_call).update(status='completed')
                             
-                            # 3. Actualizar Registro Principal
                             st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
                             st.session_state.df_contactos.at[idx, 'observacion'] = nota_input
                             st.session_state.df_contactos.at[idx, 'duracion_seg'] = duracion_seg
                             st.session_state.df_contactos.at[idx, 'enlace_grabacion'] = f"https://console.twilio.com/us1/monitor/logs/calls/{id_call}"
                             st.session_state.df_contactos.at[idx, 'url_formulario_enviado'] = link_forms
                             
-                            # 4. AGREGAR AL TRACK ESPEJO (INCREMENTAL)
                             registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
-                            st.session_state.df_historico_incremental = pd.concat(
-                                [st.session_state.df_historico_incremental, registro_espejo], 
-                                ignore_index=True
-                            )
+                            st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                             
                             st.session_state.llamada_activa_sid = None
                             st.success(f"Finalizada. Duración: {duracion_seg} seg.")
@@ -179,6 +192,10 @@ if st.session_state.df_contactos is not None:
                         except Exception as e:
                             st.session_state.llamada_activa_sid = None
                             st.rerun()
+                    
+                    # Pequeño delay y rerun para actualizar el estado automáticamente
+                    time.sleep(4)
+                    st.rerun()
 
     else:
         st.balloons()
