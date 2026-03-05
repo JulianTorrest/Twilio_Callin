@@ -8,7 +8,7 @@ import urllib.parse
 import plotly.express as px
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Camacol Dialer Pro v4.0", layout="wide")
+st.set_page_config(page_title="Camacol Dialer Pro v4.5", layout="wide")
 
 st.markdown("""
     <style>
@@ -42,7 +42,6 @@ def add_log(mensaje, tipo="INFO"):
     t_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"{t_stamp} | {st.session_state.get('agente_id', 'SYS')} | {tipo} | {mensaje}"
     st.session_state.logs.append(entry)
-    # Sincronización automática de log cada vez que se agrega uno
     if URL_SHEET_INFORME:
         try:
             df_logs = pd.DataFrame([l.split(" | ") for l in st.session_state.logs], columns=['Fecha', 'Agente', 'Tipo', 'Evento'])
@@ -60,15 +59,18 @@ if 'agente_id' not in st.session_state:
                 st.rerun()
     st.stop()
 
-# Inicializar estados faltantes
-for key, val in {'df_contactos': None, 'en_pausa': False, 'draft_notas': {}, 'meta_diaria': 50, 'llamada_activa_sid': None}.items():
-    if key not in st.session_state: st.session_state[key] = val
+# Inicializar estados (Mantenemos todos los tuyos)
+if 'df_contactos' not in st.session_state: st.session_state.df_contactos = None
+if 'en_pausa' not in st.session_state: st.session_state.en_pausa = False
+if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
+if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
+if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
+if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
     
-    # Pausas
     if not st.session_state.en_pausa:
         if st.button("☕ Iniciar Pausa"):
             st.session_state.en_pausa = True
@@ -87,7 +89,7 @@ with st.sidebar:
     if up_file and st.session_state.df_contactos is None:
         df_up = pd.read_csv(up_file, sep=None, engine='python', encoding='utf-8-sig')
         df_up.columns = [str(c).strip().lower() for c in df_up.columns]
-        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada']:
+        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
             if col not in df_up.columns: df_up[col] = 'Pendiente' if col == 'estado' else ''
         st.session_state.df_contactos = df_up
         add_log("BASE_CARGADA", "DATA")
@@ -101,10 +103,9 @@ with st.sidebar:
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
 
-# --- 5. MODULO DE METRICAS Y DASHBOARDS (Persistente) ---
+# --- 5. MODULO DE METRICAS Y DASHBOARDS ---
 st.title("Dialer Pro Camacol")
 
-# Intentar leer datos históricos del Sheet para métricas reales
 try:
     df_historico = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
 except:
@@ -115,20 +116,17 @@ tab_op, tab_met, tab_sup, tab_aud = st.tabs(["📞 Operación", "📊 Mis Métri
 with tab_met:
     st.subheader("Rendimiento del Agente")
     if not df_historico.empty:
-        # Filtrar solo lo de este agente
         df_agente = df_historico[df_historico['agente_id'].astype(str) == str(st.session_state.agente_id)]
         if not df_agente.empty:
             m1, m2, m3 = st.columns(3)
             m1.metric("Total Gestionados", len(df_agente))
             m2.metric("Efectividad", f"{(len(df_agente[df_agente['estado']=='Llamado'])/len(df_agente)*100):.1f}%")
             m3.metric("Promedio Duración", f"{df_agente['duracion_seg'].astype(float).mean():.1f}s")
-            
-            fig = px.pie(df_agente, names='estado', title="Distribución de Estados")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.pie(df_agente, names='estado', title="Distribución de Estados"), use_container_width=True)
         else:
-            st.info("Aún no tienes registros históricos en el sistema.")
+            st.info("Aún no tienes registros históricos.")
     else:
-        st.warning("No hay datos en el Sheet de informe para mostrar métricas.")
+        st.warning("No hay datos en el Sheet de informe.")
 
 with tab_sup:
     if st.session_state.agente_id == "12345678":
@@ -137,21 +135,18 @@ with tab_sup:
             st.write("Resumen por Agente Humano:")
             resumen_sup = df_historico.groupby(['agente_id', 'estado']).size().unstack(fill_value=0)
             st.dataframe(resumen_sup, use_container_width=True)
-            
-            fig_sup = px.bar(df_historico, x='agente_id', color='estado', title="Productividad por Cédula")
-            st.plotly_chart(fig_sup, use_container_width=True)
+            st.plotly_chart(px.bar(df_historico, x='agente_id', color='estado', title="Productividad por Cédula"), use_container_width=True)
     else:
         st.error("Acceso restringido a Supervisores.")
 
 with tab_aud:
     st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
 
+# --- 6. OPERACIÓN ---
 with tab_op:
     if st.session_state.df_contactos is not None:
         search = st.text_input("🔍 Buscar Cliente:").lower()
         df = st.session_state.df_contactos
-        
-        # Filtro de lista
         opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas"], horizontal=True)
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada"
         
@@ -183,14 +178,17 @@ with tab_op:
                                 st.rerun()
                             except Exception as e: st.error(e)
                     else:
-                        # LOGICA DE ESTADO DINAMICO
+                        # --- MEJORA: DETECCIÓN DINÁMICA DE ESTADO ---
                         try:
                             remote = client.calls(st.session_state.llamada_activa_sid).fetch()
                             st.info(f"Estado Twilio: {remote.status}")
                             
-                            if st.button("✅ FINALIZAR GESTIÓN"):
-                                # --- CORRECCIÓN DE LÓGICA DE ESTADO ---
-                                # Si Twilio detecta que no contestó, se marca automáticamente
+                            # Si la llamada finalizó por parte del sistema (cuelgue natural) 
+                            # o si el agente pulsa el botón manualmente:
+                            call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
+                            
+                            if st.button("✅ FINALIZAR GESTIÓN") or call_ended_by_system:
+                                # Lógica de determinación de estado
                                 final_status = 'Llamado'
                                 if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
                                     final_status = 'No Contesto'
@@ -203,20 +201,32 @@ with tab_op:
                                 st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                 st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                 
-                                # SINCRONIZAR SHEET (CRÍTICO)
+                                # SINCRONIZAR SHEET (CRÍTICO - Usando tu lógica de concatenación)
                                 if URL_SHEET_INFORME:
-                                    df_dr = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
-                                    # Asegurar que el registro nuevo tiene la cédula del agente
-                                    nuevo_row = st.session_state.df_contactos.loc[[idx]].copy()
-                                    nuevo_row['agente_id'] = st.session_state.agente_id
-                                    
-                                    df_fin = pd.concat([df_dr, nuevo_row], ignore_index=True)
-                                    df_fin = df_fin.drop_duplicates(subset=['sid_llamada'], keep='last')
-                                    conn.update(spreadsheet=URL_SHEET_INFORME, data=df_fin)
-                                    add_log(f"SYNC_EXITOSA: {final_status}", "DATA")
+                                    try:
+                                        df_dr = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
+                                        nuevo_row = st.session_state.df_contactos.loc[[idx]].copy()
+                                        nuevo_row['agente_id'] = st.session_state.agente_id
+                                        nuevo_row['sid_llamada'] = st.session_state.llamada_activa_sid
+                                        
+                                        df_fin = pd.concat([df_dr, nuevo_row], ignore_index=True)
+                                        df_fin = df_fin.drop_duplicates(subset=['sid_llamada'], keep='last')
+                                        conn.update(spreadsheet=URL_SHEET_INFORME, data=df_fin)
+                                        add_log(f"SYNC_AUTO: {final_status}", "DATA")
+                                    except Exception as e:
+                                        st.error(f"Error sincronía: {e}")
                                 
                                 st.session_state.llamada_activa_sid = None
                                 st.rerun()
-                        except: pass
-                else: st.warning("Finalice la pausa.")
-    else: st.info("Cargue CSV.")
+                            
+                            # Refresco automático para monitorear el cuelgue (cada 4 seg)
+                            time.sleep(4)
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.session_state.llamada_activa_sid = None
+                            st.rerun()
+                else:
+                    st.warning("Finalice la pausa.")
+    else:
+        st.info("Cargue CSV.")
