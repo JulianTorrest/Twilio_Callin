@@ -5,9 +5,9 @@ from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 import time
 
-st.set_page_config(page_title="Dialer Pro - Colombia", page_icon="📞", layout="wide")
+st.set_page_config(page_title="Dialer Pro - Colombia", page_icon="phone", layout="wide")
 
-# --- 1. CONFIGURACIÓN DE CONEXIONES Y SECRETS ---
+# --- 1. CONFIGURACION DE CONEXIONES Y SECRETS ---
 try:
     # Twilio
     account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
@@ -23,32 +23,32 @@ try:
     
     client = Client(account_sid, auth_token)
     
-    # Inicializar la conexión a Google Sheets
+    # Inicializar la conexion a Google Sheets
     conn = st.connection("gsheets", type=GSheetsConnection)
 except KeyError as e:
-    st.error(f"⚠️ Falta configuración en Secrets: {e}")
+    st.error(f"Falta configuracion en Secrets: {e}")
     st.stop()
 except Exception as e:
-    st.error(f"⚠️ Error de conexión: {e}")
+    st.error(f"Error de conexion: {e}")
     st.stop()
 
 # --- 2. CONTROL DE ACCESO ---
 if 'agente_id' not in st.session_state:
-    st.title("🔐 Acceso al Sistema de Llamadas")
-    cedula_input = st.text_input("Ingrese su número de cédula:", type="password").strip()
+    st.title("Acceso al Sistema de Llamadas")
+    cedula_input = st.text_input("Ingrese su numero de cedula:", type="password").strip()
     
     if st.button("Ingresar"):
         lista_limpia = [str(c).strip() for c in CEDULAS_AUTORIZADAS]
         if cedula_input in lista_limpia:
             st.session_state.agente_id = cedula_input
-            st.success(f"✅ Bienvenido, Agente {cedula_input}")
+            st.success(f"Bienvenido, Agente {cedula_input}")
             time.sleep(0.5)
             st.rerun()
         else:
-            st.error(f"🚫 Cédula '{cedula_input}' no autorizada.")
+            st.error(f"Cedula '{cedula_input}' no autorizada.")
     st.stop()
 
-# --- 3. GESTIÓN DE ESTADO (SESSION STATE) ---
+# --- 3. GESTION DE ESTADO (SESSION STATE) ---
 if 'df_contactos' not in st.session_state:
     st.session_state.df_contactos = None
 if 'llamada_activa_sid' not in st.session_state:
@@ -58,11 +58,11 @@ if 't_inicio_dt' not in st.session_state:
 if 'df_historico_incremental' not in st.session_state:
     st.session_state.df_historico_incremental = pd.DataFrame()
 
-st.title("📞 Centro de Llamadas Inteligente + Drive")
+st.title("Centro de Llamadas Inteligente + Drive")
 
 # --- 4. CARGA Y LIMPIEZA DE ARCHIVO ---
-st.sidebar.header(f"👤 Agente: {st.session_state.agente_id}")
-if st.sidebar.button("Cerrar Sesión"):
+st.sidebar.header(f"Agente: {st.session_state.agente_id}")
+if st.sidebar.button("Cerrar Sesion"):
     for key in list(st.session_state.keys()): del st.session_state[key]
     st.rerun()
 
@@ -90,11 +90,10 @@ if uploaded_file and st.session_state.df_contactos is None:
             
     st.session_state.df_contactos = df
 
-# --- 5. LÓGICA DE INTERFAZ Y TRABAJO ---
+# --- 5. LOGICA DE INTERFAZ Y TRABAJO ---
 if st.session_state.df_contactos is not None:
     df_actual = st.session_state.df_contactos
     
-    # Segmentación para métricas
     pendientes = df_actual[df_actual['estado'] == 'Pendiente']
     realizadas = df_actual[df_actual['estado'] == 'Llamado']
     no_contestados = df_actual[df_actual['estado'] == 'No Contesto']
@@ -107,10 +106,10 @@ if st.session_state.df_contactos is not None:
 
     # --- DESCARGAS PARA EL AGENTE ---
     st.sidebar.markdown("---")
-    st.sidebar.header("📥 Reportes Agente")
+    st.sidebar.header("Reportes Agente")
     if not st.session_state.df_historico_incremental.empty:
         csv_gestion = st.session_state.df_historico_incremental.to_csv(index=False).encode('utf-8-sig')
-        st.sidebar.download_button("Descargar Mi Gestión", csv_gestion, f"gestion_{st.session_state.agente_id}.csv", "text/csv")
+        st.sidebar.download_button("Descargar Mi Gestion", csv_gestion, f"gestion_{st.session_state.agente_id}.csv", "text/csv")
     
     if not pendientes.empty:
         csv_pend = pendientes.to_csv(index=False).encode('utf-8-sig')
@@ -118,21 +117,20 @@ if st.session_state.df_contactos is not None:
 
     st.write("---")
 
-    # --- NUEVO: SELECTOR DE LISTA DE TRABAJO (SOLICITADO) ---
-    st.subheader("🎯 Selección de Lista")
+    # --- SELECTOR DE LISTA DE TRABAJO ---
+    st.subheader("Seleccion de Lista")
     opcion_lista = st.radio(
         "Elija el grupo de clientes a llamar:",
         ["Llamadas Pendientes (Nuevos)", "No Contestaron (Re-intentos)"],
         horizontal=True
     )
 
-    # Filtrar el cliente a mostrar según la elección del radio button
     if "Pendientes" in opcion_lista:
         df_trabajo = pendientes
     else:
         df_trabajo = no_contestados
 
-    # --- PANEL DE MARCACIÓN ---
+    # --- PANEL DE MARCACION ---
     if not df_trabajo.empty:
         idx = df_trabajo.index[0]
         proximo = df_trabajo.loc[idx]
@@ -145,18 +143,18 @@ if st.session_state.df_contactos is not None:
             col_info, col_ctrl = st.columns([2, 1])
             
             with col_info:
-                st.subheader(f"👤 Cliente: {proximo['nombre']}")
+                st.subheader(f"Cliente: {proximo['nombre']}")
                 if st.session_state.llamada_activa_sid is None:
-                    st.warning(f"⚠️ Trabajando lista: {opcion_lista}")
+                    st.warning(f"Trabajando lista: {opcion_lista}")
                 else:
-                    st.info(f"📞 Marcando: **{num_final}**")
+                    st.info(f"Marcando: {num_final}")
                 
                 nota_input = st.text_area("Notas / Observaciones:", key=f"nota_{idx}")
 
             with col_ctrl:
                 if st.session_state.llamada_activa_sid is None:
-                    st.write("### 🟢 Estado: Listo")
-                    if st.button("🚀 INICIAR LLAMADA", key=f"btn_start_{idx}", use_container_width=True, type="primary"):
+                    st.write("### Estado: Listo")
+                    if st.button("INICIAR LLAMADA", key=f"btn_start_{idx}", use_container_width=True, type="primary"):
                         try:
                             ahora = datetime.now()
                             call = client.calls.create(url=function_url, to=num_final, from_=twilio_number, record=True)
@@ -176,13 +174,12 @@ if st.session_state.df_contactos is not None:
                     except Exception:
                         current_status = "unknown"
 
-                    st.write(f"### 🔴 Estado: {current_status.upper()}")
+                    st.write(f"### Estado: {current_status.upper()}")
 
                     id_call = st.session_state.llamada_activa_sid
                     link_forms = f"{forms_base_url}?id_llamada={id_call}&agente={st.session_state.agente_id}"
-                    st.markdown(f"### [📝 LLENAR FORMULARIO]({link_forms})")
+                    st.markdown(f"### [LLENAR FORMULARIO]({link_forms})")
 
-                    # DETECCIÓN AUTOMÁTICA DE FIN DE LLAMADA (NO CONTESTÓ)
                     if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
                         st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
                         st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: {current_status}"
@@ -196,7 +193,7 @@ if st.session_state.df_contactos is not None:
                         st.session_state.llamada_activa_sid = None
                         st.rerun()
 
-                    if st.button("⏹️ FINALIZAR LLAMADA", key="btn_hangup", use_container_width=True, type="secondary"):
+                    if st.button("FINALIZAR LLAMADA", key="btn_hangup", use_container_width=True, type="secondary"):
                         try:
                             duracion_seg = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                             client.calls(id_call).update(status='completed')
@@ -223,11 +220,11 @@ if st.session_state.df_contactos is not None:
                     st.rerun()
 
     else:
-        st.success(f"✅ ¡Has terminado con todos los contactos de la lista: {opcion_lista}!")
+        st.success(f"Has terminado con todos los contactos de la lista: {opcion_lista}")
 
     if not st.session_state.df_historico_incremental.empty:
-        with st.expander("🔍 Vista Previa del Track Espejo (Drive Sync)"):
+        with st.expander("Vista Previa del Track Espejo (Drive Sync)"):
             st.dataframe(st.session_state.df_historico_incremental)
 
 else:
-    st.info("👈 Por favor, ingrese su cédula y cargue el archivo clientes.csv.")
+    st.info("Por favor, ingrese su cedula y cargue el archivo clientes.csv.")
