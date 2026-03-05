@@ -63,32 +63,30 @@ if uploaded_file and st.session_state.df_contactos is None:
     df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8-sig')
     df.columns = [str(c).strip().lower() for c in df.columns]
     columnas_extra = {
-        'estado': 'Pendiente', 
-        'observacion': '', 
-        'fecha_llamada': '',
-        'hora_inicio': '', 
-        'duracion_seg': 0, 
-        'sid_llamada': '',
-        'enlace_grabacion': '', 
-        'url_formulario_enviado': '',
+        'estado': 'Pendiente', 'observacion': '', 'fecha_llamada': '',
+        'hora_inicio': '', 'duracion_seg': 0, 'sid_llamada': '',
+        'enlace_grabacion': '', 'url_formulario_enviado': '',
         'agente_id': st.session_state.agente_id
     }
     for col, val in columnas_extra.items():
-        if col not in df.columns: 
-            df[col] = val
+        if col not in df.columns: df[col] = val
     st.session_state.df_contactos = df
 
 # --- 5. LOGICA DE INTERFAZ Y TRABAJO ---
 if st.session_state.df_contactos is not None:
     
-    # NUEVO: MODULO DE PRUEBAS MEDIANTE TABS
     tab_op, tab_test = st.tabs(["Operacion Real", "Pruebas de Calidad"])
 
     with tab_test:
-        st.subheader("Configuracion de Enrutamiento de Prueba")
-        st.info("Utilice esta pestaña para validar la salida de audio sin afectar el numero real del cliente.")
-        modo_prueba = st.toggle("Activar Modo Prueba", help="Si esta activo, la llamada se desviara al numero de abajo.")
-        numero_prueba = st.text_input("Numero de destino para pruebas (ej: +573001234567):", value="+57")
+        st.subheader("Configuracion de Enrutamiento de Prueba (Humano a Humano)")
+        st.info("Esta prueba llamara primero a tu celular y, al contestar, te unira con el numero de prueba.")
+        modo_prueba = st.toggle("Activar Modo Prueba")
+        
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            mi_celular = st.text_input("Tu celular (Agente):", value="+57", help="Donde recibiras la llamada de Twilio")
+        with col_t2:
+            numero_prueba = st.text_input("Numero a probar (Destino):", value="+57", help="Numero al que quieres llamar para probar calidad")
 
     with tab_op:
         df_actual = st.session_state.df_contactos
@@ -102,13 +100,10 @@ if st.session_state.df_contactos is not None:
         c3.metric("No Contesto", len(no_contestados))
         c4.metric("Track Espejo", len(st.session_state.df_historico_incremental))
 
-        # --- NUEVA FUNCIONALIDAD 1: DESCARGA COMBINADA ---
+        # --- DESCARGA COMBINADA ---
         st.sidebar.markdown("---")
         st.sidebar.header("Reportes Agente")
-        
-        # Unimos Pendientes + No Contestados para la descarga
         df_para_descarga = pd.concat([pendientes, no_contestados])
-        
         if not df_para_descarga.empty:
             csv_pend = df_para_descarga.to_csv(index=False).encode('utf-8-sig')
             st.sidebar.download_button("Descargar Pendientes + No Contestados", csv_pend, "pendientes_totales.csv", "text/csv")
@@ -126,9 +121,8 @@ if st.session_state.df_contactos is not None:
             idx = df_trabajo.index[0]
             proximo = df_trabajo.loc[idx]
             
-            # --- NUEVA FUNCIONALIDAD 2: LOGICA DE ENRUTAMIENTO ---
-            num_real = f"+{str(proximo['codigo_pais']).strip().replace('+', '')}{str(proximo['telefono']).strip()}"
-            destino_final = numero_prueba if modo_prueba else num_real
+            # Parametros de marcacion
+            num_real_cliente = f"+{str(proximo['codigo_pais']).strip().replace('+', '')}{str(proximo['telefono']).strip()}"
 
             with st.container(border=True):
                 col_info, col_ctrl = st.columns([2, 1])
@@ -138,7 +132,8 @@ if st.session_state.df_contactos is not None:
                         label_aviso = " (MODO PRUEBA ACTIVO)" if modo_prueba else ""
                         st.warning(f"Trabajando lista: {opcion_lista}{label_aviso}")
                     else:
-                        st.info(f"Marcando a: {destino_final}")
+                        msg = f"Conectando {mi_celular} con {numero_prueba}" if modo_prueba else f"Marcando a: {num_real_cliente}"
+                        st.info(msg)
                     nota_input = st.text_area("Notas / Observaciones:", key=f"nota_{idx}")
 
                 with col_ctrl:
@@ -147,8 +142,22 @@ if st.session_state.df_contactos is not None:
                         if st.button("INICIAR LLAMADA", key=f"btn_start_{idx}", use_container_width=True, type="primary"):
                             try:
                                 ahora = datetime.now()
-                                # Se usa destino_final (que puede ser el de prueba o el real)
-                                call = client.calls.create(url=function_url, to=destino_final, from_=twilio_number, record=True)
+                                
+                                if modo_prueba:
+                                    # LOGICA DE PUENTE (HUMANO A HUMANO)
+                                    twiml_bridge = f"""
+                                    <Response>
+                                        <Say language="es-MX">Iniciando prueba de calidad. Conectando con el destino.</Say>
+                                        <Dial record="record-from-answer-dual" callerId="{twilio_number}">
+                                            <Number>{numero_prueba}</Number>
+                                        </Dial>
+                                    </Response>
+                                    """
+                                    call = client.calls.create(twiml=twiml_bridge, to=mi_celular, from_=twilio_number)
+                                else:
+                                    # LOGICA REAL (ORIGINAL)
+                                    call = client.calls.create(url=function_url, to=num_real_cliente, from_=twilio_number, record=True)
+                                
                                 st.session_state.llamada_activa_sid = call.sid
                                 st.session_state.t_inicio_dt = ahora 
                                 st.session_state.df_contactos.at[idx, 'sid_llamada'] = call.sid
@@ -158,25 +167,23 @@ if st.session_state.df_contactos is not None:
                             except Exception as e:
                                 st.error(f"Error Twilio: {e}")
                     else:
+                        # (Mantenemos toda tu logica de monitoreo y finalizacion intacta)
                         try:
                             remote_call = client.calls(st.session_state.llamada_activa_sid).fetch()
                             current_status = remote_call.status
-                        except Exception: 
-                            current_status = "unknown"
+                        except Exception: current_status = "unknown"
 
                         st.write(f"### Estado: {current_status.upper()}")
                         id_call = st.session_state.llamada_activa_sid
                         link_forms = f"{forms_base_url}?id_llamada={id_call}&agente={st.session_state.agente_id}"
                         st.markdown(f"### [LLENAR FORMULARIO]({link_forms})")
 
-                        # Deteccion automatica No Contesto
                         if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
                             st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
                             st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: {current_status}"
                             registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                             st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
-                            if URL_SHEET_INFORME: 
-                                conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
+                            if URL_SHEET_INFORME: conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                             st.session_state.llamada_activa_sid = None
                             st.rerun()
 
@@ -192,8 +199,7 @@ if st.session_state.df_contactos is not None:
                                 
                                 registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                                 st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
-                                if URL_SHEET_INFORME: 
-                                    conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
+                                if URL_SHEET_INFORME: conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                                 st.session_state.llamada_activa_sid = None
                                 st.rerun()
                             except Exception:
