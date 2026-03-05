@@ -2,24 +2,34 @@ import streamlit as st
 import pandas as pd
 from twilio.rest import Client
 from datetime import datetime
-import io
+from streamlit_gsheets import GSheetsConnection
 import time
 
 st.set_page_config(page_title="Dialer Pro - Colombia", page_icon="📞", layout="wide")
 
-# --- 1. CONFIGURACIÓN DE TWILIO Y SECRETS ---
+# --- 1. CONFIGURACIÓN DE CONEXIONES Y SECRETS ---
 try:
+    # Twilio
     account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
     auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
     twilio_number = st.secrets.get("TWILIO_NUMBER", "+17068069672")
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     
+    # Google Sheets (Asegúrate de poner el ID de tu hoja en Secrets)
+    URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
+    
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"] 
     
     client = Client(account_sid, auth_token)
-except KeyError:
-    st.error("⚠️ Configura los Secrets (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FUNCTION_URL, MS_FORMS_URL) en Streamlit Cloud.")
+    
+    # Inicializar la conexión a Google Sheets
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except KeyError as e:
+    st.error(f"⚠️ Falta configuración en Secrets: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"⚠️ Error de conexión: {e}")
     st.stop()
 
 # --- 2. CONTROL DE ACCESO ---
@@ -48,7 +58,7 @@ if 't_inicio_dt' not in st.session_state:
 if 'df_historico_incremental' not in st.session_state:
     st.session_state.df_historico_incremental = pd.DataFrame()
 
-st.title("📞 Centro de Llamadas Inteligente")
+st.title("📞 Centro de Llamadas Inteligente + Drive")
 
 # --- 4. CARGA Y LIMPIEZA DE ARCHIVO ---
 st.sidebar.header(f"👤 Agente: {st.session_state.agente_id}")
@@ -93,15 +103,14 @@ if st.session_state.df_contactos is not None:
     c3.metric("No Contesto", len(no_contestados))
     c4.metric("Track Espejo", len(st.session_state.df_historico_incremental))
 
-    # --- DESCARGAS EN BARRA LATERAL ---
-    st.sidebar.header("2. Descargar Reportes")
-    if not realizadas.empty or not no_contestados.empty:
-        csv_real = df_actual[df_actual['estado'] != 'Pendiente'].to_csv(index=False).encode('utf-8-sig')
-        st.sidebar.download_button("✅ Reporte Consolidado (CSV)", csv_real, "reporte_gestion.csv")
-    
-    if not st.session_state.df_historico_incremental.empty:
-        csv_espejo = st.session_state.df_historico_incremental.to_csv(index=False).encode('utf-8-sig')
-        st.sidebar.download_button("🛡️ Descargar Track Espejo", csv_espejo, f"track_espejo_{st.session_state.agente_id}.csv")
+    # --- DESCARGAS Y DRIVE EN BARRA LATERAL ---
+    st.sidebar.header("2. Sincronización Drive")
+    if st.sidebar.button("☁️ Forzar Subida a Sheets"):
+        if not st.session_state.df_historico_incremental.empty:
+            conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
+            st.sidebar.success("¡Datos sincronizados en Drive!")
+        else:
+            st.sidebar.info("No hay datos nuevos para subir.")
 
     st.write("---")
 
@@ -123,6 +132,7 @@ if st.session_state.df_contactos is not None:
                 nota_input = st.text_area("Notas / Observaciones:", key=f"nota_{idx}")
 
             with col_ctrl:
+                # ESTADO: ESPERANDO PARA LLAMAR
                 if st.session_state.llamada_activa_sid is None:
                     st.write("### 🟢 Estado: Listo")
                     if st.button("🚀 INICIAR LLAMADA", key=f"btn_start_{idx}", use_container_width=True, type="primary"):
@@ -140,10 +150,9 @@ if st.session_state.df_contactos is not None:
                         except Exception as e:
                             st.error(f"Error Twilio: {e}")
                 
+                # ESTADO: EN LLAMADA ACTIVA O MONITOREO
                 else:
-                    # --- MEJORA: MONITOREO DE ESTADO ---
                     try:
-                        # Consultamos el estado real en Twilio
                         remote_call = client.calls(st.session_state.llamada_activa_sid).fetch()
                         current_status = remote_call.status
                     except Exception:
@@ -151,21 +160,24 @@ if st.session_state.df_contactos is not None:
 
                     st.write(f"### 🔴 Estado: {current_status.upper()}")
 
-                    # Si el usuario NO contestó o la llamada terminó sola
+                    # SI EL USUARIO NO CONTESTÓ O LA LLAMADA FALLÓ (DETECCIÓN AUTOMÁTICA)
                     if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
                         st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
                         st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: Llamada {current_status}"
                         
-                        # Guardar en Track Espejo
                         registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                         st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                         
+                        # GUARDADO AUTOMÁTICO EN GOOGLE SHEETS
+                        if URL_SHEET_INFORME:
+                            conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
+                        
                         st.session_state.llamada_activa_sid = None
-                        st.warning(f"La llamada terminó ({current_status}). Pasando al siguiente...")
+                        st.warning(f"La llamada terminó ({current_status}). Actualizando Drive...")
                         time.sleep(2)
                         st.rerun()
 
-                    # Interfaz normal de llamada activa
+                    # INTERFAZ DE GESTIÓN MIENTRAS ESTÁ AL HABLA
                     id_call = st.session_state.llamada_activa_sid
                     link_forms = f"{forms_base_url}?id_llamada={id_call}&cliente={proximo['nombre']}&agente={st.session_state.agente_id}"
                     st.markdown(f"### [📝 LLENAR FORMULARIO]({link_forms})")
@@ -185,15 +197,19 @@ if st.session_state.df_contactos is not None:
                             registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                             st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                             
+                            # GUARDADO AUTOMÁTICO EN GOOGLE SHEETS AL FINALIZAR
+                            if URL_SHEET_INFORME:
+                                conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
+                            
                             st.session_state.llamada_activa_sid = None
-                            st.success(f"Finalizada. Duración: {duracion_seg} seg.")
+                            st.success(f"Finalizada y Guardada en Drive. Duración: {duracion_seg} seg.")
                             time.sleep(1)
                             st.rerun()
                         except Exception as e:
                             st.session_state.llamada_activa_sid = None
                             st.rerun()
                     
-                    # Pequeño delay y rerun para actualizar el estado automáticamente
+                    # Refresco automático cada 4 seg para chequear si el cliente colgó solo
                     time.sleep(4)
                     st.rerun()
 
@@ -203,7 +219,7 @@ if st.session_state.df_contactos is not None:
 
     # Vista previa del Track Espejo (lo que se va acumulando)
     if not st.session_state.df_historico_incremental.empty:
-        with st.expander("🔍 Vista Previa del Track Espejo (Acumulado)"):
+        with st.expander("🔍 Vista Previa del Track Espejo (Drive Sync)"):
             st.dataframe(st.session_state.df_historico_incremental)
 
 else:
