@@ -2,3 +2,4 @@ streamlit
 twilio
 pandas
 st-gsheets-connection
+plotly
