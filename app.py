@@ -16,7 +16,7 @@ try:
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     
-    # Google Sheets (Asegúrate de poner el ID de tu hoja en Secrets)
+    # Google Sheets
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
     
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"] 
@@ -103,14 +103,16 @@ if st.session_state.df_contactos is not None:
     c3.metric("No Contesto", len(no_contestados))
     c4.metric("Track Espejo", len(st.session_state.df_historico_incremental))
 
-    # --- DESCARGAS Y DRIVE EN BARRA LATERAL ---
-    st.sidebar.header("2. Sincronización Drive")
-    if st.sidebar.button("☁️ Forzar Subida a Sheets"):
-        if not st.session_state.df_historico_incremental.empty:
-            conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
-            st.sidebar.success("¡Datos sincronizados en Drive!")
-        else:
-            st.sidebar.info("No hay datos nuevos para subir.")
+    # --- DESCARGAS PARA EL AGENTE (RESTAURADO) ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("📥 Reportes Agente")
+    if not st.session_state.df_historico_incremental.empty:
+        csv_gestion = st.session_state.df_historico_incremental.to_csv(index=False).encode('utf-8-sig')
+        st.sidebar.download_button("Descargar Mi Gestión", csv_gestion, f"gestion_{st.session_state.agente_id}.csv", "text/csv")
+    
+    if not pendientes.empty:
+        csv_pend = pendientes.to_csv(index=False).encode('utf-8-sig')
+        st.sidebar.download_button("Descargar Pendientes", csv_pend, "pendientes.csv", "text/csv")
 
     st.write("---")
 
@@ -128,21 +130,23 @@ if st.session_state.df_contactos is not None:
             
             with col_info:
                 st.subheader(f"👤 Cliente: {proximo['nombre']}")
-                st.info(f"📞 Marcando: **{num_final}**")
+                # MEJORA: Solo muestra el número si se está llamando
+                if st.session_state.llamada_activa_sid is None:
+                    st.warning("⚠️ Estado: Esperando acción para llamar")
+                else:
+                    st.info(f"📞 Marcando: **{num_final}**")
+                
                 nota_input = st.text_area("Notas / Observaciones:", key=f"nota_{idx}")
 
             with col_ctrl:
-                # ESTADO: ESPERANDO PARA LLAMAR
                 if st.session_state.llamada_activa_sid is None:
                     st.write("### 🟢 Estado: Listo")
                     if st.button("🚀 INICIAR LLAMADA", key=f"btn_start_{idx}", use_container_width=True, type="primary"):
                         try:
                             ahora = datetime.now()
                             call = client.calls.create(url=function_url, to=num_final, from_=twilio_number, record=True)
-                            
                             st.session_state.llamada_activa_sid = call.sid
                             st.session_state.t_inicio_dt = ahora 
-                            
                             st.session_state.df_contactos.at[idx, 'sid_llamada'] = call.sid
                             st.session_state.df_contactos.at[idx, 'fecha_llamada'] = ahora.strftime("%Y-%m-%d")
                             st.session_state.df_contactos.at[idx, 'hora_inicio'] = ahora.strftime("%H:%M:%S")
@@ -150,7 +154,6 @@ if st.session_state.df_contactos is not None:
                         except Exception as e:
                             st.error(f"Error Twilio: {e}")
                 
-                # ESTADO: EN LLAMADA ACTIVA O MONITOREO
                 else:
                     try:
                         remote_call = client.calls(st.session_state.llamada_activa_sid).fetch()
@@ -160,36 +163,34 @@ if st.session_state.df_contactos is not None:
 
                     st.write(f"### 🔴 Estado: {current_status.upper()}")
 
-                    # SI EL USUARIO NO CONTESTÓ O LA LLAMADA FALLÓ (DETECCIÓN AUTOMÁTICA)
+                    id_call = st.session_state.llamada_activa_sid
+                    link_forms = f"{forms_base_url}?id_llamada={id_call}&agente={st.session_state.agente_id}"
+                    st.markdown(f"### [📝 LLENAR FORMULARIO]({link_forms})")
+
+                    # DETECCIÓN AUTOMÁTICA DE FIN DE LLAMADA (NO CONTESTÓ)
                     if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
                         st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
-                        st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: Llamada {current_status}"
+                        # SE INCLUYE EL LINK EN LAS NOTAS PARA EL DRIVE
+                        st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: {current_status} | Form: {link_forms}"
                         
                         registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                         st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                         
-                        # GUARDADO AUTOMÁTICO EN GOOGLE SHEETS
+                        # SINCRONIZACIÓN AUTOMÁTICA A DRIVE
                         if URL_SHEET_INFORME:
                             conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                         
                         st.session_state.llamada_activa_sid = None
-                        st.warning(f"La llamada terminó ({current_status}). Actualizando Drive...")
-                        time.sleep(2)
                         st.rerun()
 
-                    # INTERFAZ DE GESTIÓN MIENTRAS ESTÁ AL HABLA
-                    id_call = st.session_state.llamada_activa_sid
-                    link_forms = f"{forms_base_url}?id_llamada={id_call}&cliente={proximo['nombre']}&agente={st.session_state.agente_id}"
-                    st.markdown(f"### [📝 LLENAR FORMULARIO]({link_forms})")
-                    
                     if st.button("⏹️ FINALIZAR LLAMADA", key="btn_hangup", use_container_width=True, type="secondary"):
                         try:
-                            t_fin = datetime.now()
-                            duracion_seg = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
+                            duracion_seg = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                             client.calls(id_call).update(status='completed')
                             
                             st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
-                            st.session_state.df_contactos.at[idx, 'observacion'] = nota_input
+                            # SE INCLUYE EL LINK JUNTO A LAS NOTAS DEL AGENTE
+                            st.session_state.df_contactos.at[idx, 'observacion'] = f"{nota_input} | Link Form: {link_forms}"
                             st.session_state.df_contactos.at[idx, 'duracion_seg'] = duracion_seg
                             st.session_state.df_contactos.at[idx, 'enlace_grabacion'] = f"https://console.twilio.com/us1/monitor/logs/calls/{id_call}"
                             st.session_state.df_contactos.at[idx, 'url_formulario_enviado'] = link_forms
@@ -197,19 +198,16 @@ if st.session_state.df_contactos is not None:
                             registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                             st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                             
-                            # GUARDADO AUTOMÁTICO EN GOOGLE SHEETS AL FINALIZAR
+                            # SINCRONIZACIÓN AUTOMÁTICA A DRIVE AL TERMINAR
                             if URL_SHEET_INFORME:
                                 conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                             
                             st.session_state.llamada_activa_sid = None
-                            st.success(f"Finalizada y Guardada en Drive. Duración: {duracion_seg} seg.")
-                            time.sleep(1)
                             st.rerun()
-                        except Exception as e:
+                        except Exception:
                             st.session_state.llamada_activa_sid = None
                             st.rerun()
                     
-                    # Refresco automático cada 4 seg para chequear si el cliente colgó solo
                     time.sleep(4)
                     st.rerun()
 
@@ -217,7 +215,6 @@ if st.session_state.df_contactos is not None:
         st.balloons()
         st.success("✅ ¡Has terminado con todos los contactos del archivo!")
 
-    # Vista previa del Track Espejo (lo que se va acumulando)
     if not st.session_state.df_historico_incremental.empty:
         with st.expander("🔍 Vista Previa del Track Espejo (Drive Sync)"):
             st.dataframe(st.session_state.df_historico_incremental)
