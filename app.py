@@ -93,6 +93,8 @@ if uploaded_file and st.session_state.df_contactos is None:
 # --- 5. LÓGICA DE INTERFAZ Y TRABAJO ---
 if st.session_state.df_contactos is not None:
     df_actual = st.session_state.df_contactos
+    
+    # Segmentación para métricas
     pendientes = df_actual[df_actual['estado'] == 'Pendiente']
     realizadas = df_actual[df_actual['estado'] == 'Llamado']
     no_contestados = df_actual[df_actual['estado'] == 'No Contesto']
@@ -103,7 +105,7 @@ if st.session_state.df_contactos is not None:
     c3.metric("No Contesto", len(no_contestados))
     c4.metric("Track Espejo", len(st.session_state.df_historico_incremental))
 
-    # --- DESCARGAS PARA EL AGENTE (RESTAURADO) ---
+    # --- DESCARGAS PARA EL AGENTE ---
     st.sidebar.markdown("---")
     st.sidebar.header("📥 Reportes Agente")
     if not st.session_state.df_historico_incremental.empty:
@@ -116,10 +118,24 @@ if st.session_state.df_contactos is not None:
 
     st.write("---")
 
+    # --- NUEVO: SELECTOR DE LISTA DE TRABAJO (SOLICITADO) ---
+    st.subheader("🎯 Selección de Lista")
+    opcion_lista = st.radio(
+        "Elija el grupo de clientes a llamar:",
+        ["Llamadas Pendientes (Nuevos)", "No Contestaron (Re-intentos)"],
+        horizontal=True
+    )
+
+    # Filtrar el cliente a mostrar según la elección del radio button
+    if "Pendientes" in opcion_lista:
+        df_trabajo = pendientes
+    else:
+        df_trabajo = no_contestados
+
     # --- PANEL DE MARCACIÓN ---
-    if not pendientes.empty:
-        idx = pendientes.index[0]
-        proximo = pendientes.loc[idx]
+    if not df_trabajo.empty:
+        idx = df_trabajo.index[0]
+        proximo = df_trabajo.loc[idx]
 
         pais = str(proximo['codigo_pais']).strip().replace('+', '')
         tel = str(proximo['telefono']).strip()
@@ -130,9 +146,8 @@ if st.session_state.df_contactos is not None:
             
             with col_info:
                 st.subheader(f"👤 Cliente: {proximo['nombre']}")
-                # MEJORA: Solo muestra el número si se está llamando
                 if st.session_state.llamada_activa_sid is None:
-                    st.warning("⚠️ Estado: Esperando acción para llamar")
+                    st.warning(f"⚠️ Trabajando lista: {opcion_lista}")
                 else:
                     st.info(f"📞 Marcando: **{num_final}**")
                 
@@ -170,13 +185,11 @@ if st.session_state.df_contactos is not None:
                     # DETECCIÓN AUTOMÁTICA DE FIN DE LLAMADA (NO CONTESTÓ)
                     if current_status in ['no-answer', 'busy', 'failed', 'canceled']:
                         st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
-                        # SE INCLUYE EL LINK EN LAS NOTAS PARA EL DRIVE
-                        st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: {current_status} | Form: {link_forms}"
+                        st.session_state.df_contactos.at[idx, 'observacion'] = f"Sistema: {current_status}"
                         
                         registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                         st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                         
-                        # SINCRONIZACIÓN AUTOMÁTICA A DRIVE
                         if URL_SHEET_INFORME:
                             conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                         
@@ -189,8 +202,7 @@ if st.session_state.df_contactos is not None:
                             client.calls(id_call).update(status='completed')
                             
                             st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
-                            # SE INCLUYE EL LINK JUNTO A LAS NOTAS DEL AGENTE
-                            st.session_state.df_contactos.at[idx, 'observacion'] = f"{nota_input} | Link Form: {link_forms}"
+                            st.session_state.df_contactos.at[idx, 'observacion'] = nota_input
                             st.session_state.df_contactos.at[idx, 'duracion_seg'] = duracion_seg
                             st.session_state.df_contactos.at[idx, 'enlace_grabacion'] = f"https://console.twilio.com/us1/monitor/logs/calls/{id_call}"
                             st.session_state.df_contactos.at[idx, 'url_formulario_enviado'] = link_forms
@@ -198,7 +210,6 @@ if st.session_state.df_contactos is not None:
                             registro_espejo = st.session_state.df_contactos.loc[[idx]].copy()
                             st.session_state.df_historico_incremental = pd.concat([st.session_state.df_historico_incremental, registro_espejo], ignore_index=True)
                             
-                            # SINCRONIZACIÓN AUTOMÁTICA A DRIVE AL TERMINAR
                             if URL_SHEET_INFORME:
                                 conn.update(spreadsheet=URL_SHEET_INFORME, data=st.session_state.df_historico_incremental)
                             
@@ -212,8 +223,7 @@ if st.session_state.df_contactos is not None:
                     st.rerun()
 
     else:
-        st.balloons()
-        st.success("✅ ¡Has terminado con todos los contactos del archivo!")
+        st.success(f"✅ ¡Has terminado con todos los contactos de la lista: {opcion_lista}!")
 
     if not st.session_state.df_historico_incremental.empty:
         with st.expander("🔍 Vista Previa del Track Espejo (Drive Sync)"):
