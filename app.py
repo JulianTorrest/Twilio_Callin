@@ -6,26 +6,18 @@ from streamlit_gsheets import GSheetsConnection
 import time
 import urllib.parse
 
-# --- CONFIGURACION DE PAGINA Y DISEÑO RESPONSIVO ---
-st.set_page_config(page_title="Camacol Dialer Pro", layout="wide")
+# --- CONFIGURACION DE PAGINA ---
+st.set_page_config(page_title="Camacol Dialer Pro v3", layout="wide")
 
+# --- ESTILOS CSS ---
 st.markdown("""
     <style>
-    /* Diseño adaptable para tablets y moviles */
-    [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .stMetric { background-color: #ffffff; padding: 10px; border-radius: 10px; border: 1px solid #e1e4e8; }
-    .client-card { 
-        background-color: #f0f2f6; padding: 15px; border-radius: 15px; 
-        border-left: 8px solid #003366; margin-bottom: 15px;
-    }
-    .main-header { color: #003366; text-align: center; border-bottom: 2px solid #003366; padding-bottom: 10px; }
-    .log-box { 
-        font-family: 'Courier New', monospace; font-size: 0.85rem; 
-        background: #1e1e1e; color: #4af626; padding: 12px; 
-        border-radius: 8px; height: 200px; overflow-y: auto;
-    }
-    /* Botones mas grandes para pantallas tactiles */
-    .stButton>button { width: 100%; height: 3em; font-weight: bold; }
+    .client-card { background-color: #f0f2f6; padding: 15px; border-radius: 15px; border-left: 8px solid #003366; }
+    .log-box { font-family: monospace; font-size: 0.8rem; background: #1e1e1e; color: #4af626; padding: 10px; border-radius: 5px; height: 180px; overflow-y: auto; }
+    .latency-green { height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; }
+    .latency-red { height: 10px; width: 10px; background-color: #dc3545; border-radius: 50%; display: inline-block; }
+    .pause-status { color: #ff8c00; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -35,203 +27,207 @@ try:
     auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
     twilio_number = st.secrets.get("TWILIO_NUMBER", "+17068069672")
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
-    forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
+    forms_base_url = st.secrets.get("MS_FORMS_URL")
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
-    CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"] 
     client = Client(account_sid, auth_token)
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error(f"Error de configuracion inicial: {e}")
+    st.error(f"Error de configuración: {e}")
     st.stop()
 
-# --- 2. AUDITORIA Y LOGS (Manejo de errores robusto) ---
+# --- 2. GESTION DE LOGS Y AUDITORIA ---
 if 'logs' not in st.session_state:
     st.session_state.logs = []
+    st.session_state.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def add_log(mensaje, tipo="INFO"):
-    t_stamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = f"[{t_stamp}] {tipo}: {mensaje}"
-    st.session_state.logs.append(log_entry)
-    # Mantener solo los ultimos 100 logs para rendimiento
-    if len(st.session_state.logs) > 100: st.session_state.logs.pop(0)
+    t_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"{t_stamp} | {st.session_state.get('agente_id', 'SYS')} | {tipo} | {mensaje}"
+    st.session_state.logs.append(entry)
+    # Mantener historial pequeño en pantalla pero completo para exportar
+    if len(st.session_state.logs) > 500: st.session_state.logs.pop(0)
 
-# --- 3. CONTROL DE ACCESO ---
+def sync_logs_to_drive():
+    """Sincroniza los logs con una pestaña de auditoría en el sheet"""
+    if URL_SHEET_INFORME and st.session_state.logs:
+        try:
+            df_logs = pd.DataFrame([l.split(" | ") for l in st.session_state.logs], 
+                                   columns=['Fecha', 'Agente', 'Tipo', 'Evento'])
+            conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="Auditoria_Logs", data=df_logs)
+        except: pass
+
+# --- 3. GESTION DE ESTADO (PERSISTENCIA Y PAUSAS) ---
 if 'agente_id' not in st.session_state:
-    st.markdown("<h1 class='main-header'>Acceso Camacol</h1>", unsafe_allow_html=True)
-    with st.container():
-        c1, c2, c3 = st.columns([1,2,1])
-        with c2:
-            with st.form("login"):
-                cedula_input = st.text_input("Cedula de Agente:", type="password").strip()
-                if st.form_submit_button("INGRESAR"):
-                    if cedula_input in CEDULAS_AUTORIZADAS:
-                        st.session_state.agente_id = cedula_input
-                        add_log(f"Login exitoso agente {cedula_input}")
-                        st.rerun()
-                    else: st.error("Acceso denegado.")
+    st.session_state.agente_id = None
+if 'en_pausa' not in st.session_state: st.session_state.en_pausa = False
+if 'pausa_inicio' not in st.session_state: st.session_state.pausa_inicio = None
+if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
+if 'df_contactos' not in st.session_state: st.session_state.df_contactos = None
+if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
+
+# --- 4. ACCESO ---
+if not st.session_state.agente_id:
+    st.title("Acceso Camacol Dialer")
+    with st.form("login"):
+        cedula = st.text_input("Ingrese Cédula:", type="password").strip()
+        if st.form_submit_button("Ingresar"):
+            if cedula in ["1121871773", "87654321", "12345678"]:
+                st.session_state.agente_id = cedula
+                add_log("INICIO_SESION", "LOGIN")
+                st.rerun()
+            else: st.error("Cédula no autorizada")
     st.stop()
 
-# --- 4. GESTION DE ESTADO Y PERSISTENCIA ---
-if 'df_contactos' not in st.session_state: st.session_state.df_contactos = None
-if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
-if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
-if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
+# --- 5. INDICADOR DE LATENCIA (Twilio API Check) ---
+def check_twilio():
+    try:
+        client.calls.list(limit=1)
+        return True
+    except: return False
 
-# --- 5. SIDEBAR (Carga y Reportes) ---
+# --- 6. SIDEBAR: METRICAS Y PAUSAS ---
 with st.sidebar:
-    st.header(f"Agente: {st.session_state.agente_id}")
-    st.session_state.meta_diaria = st.number_input("Meta de hoy:", value=st.session_state.meta_diaria)
+    st.title(f"Agente: {st.session_state.agente_id}")
     
-    if st.button("Cerrar Sesion", type="secondary"):
-        add_log("Sesion cerrada")
-        for key in list(st.session_state.keys()): del st.session_state[key]
-        st.rerun()
+    # Indicador de Latencia
+    is_online = check_twilio()
+    st.markdown(f"{'<span class=latency-green></span>' if is_online else '<span class=latency-red></span>'} API Status: {'Online' if is_online else 'Offline'}", unsafe_allow_html=True)
     
+    # Sistema de Pausas
     st.divider()
+    if not st.session_state.en_pausa:
+        if st.button("🔴 Iniciar Pausa / Break", use_container_width=True):
+            st.session_state.en_pausa = True
+            st.session_state.pausa_inicio = datetime.now()
+            add_log("INICIO_PAUSA", "ESTADO")
+            st.rerun()
+    else:
+        duracion_pausa = int((datetime.now() - st.session_state.pausa_inicio).total_seconds() / 60)
+        st.markdown(f"<p class='pause-status'>EN PAUSA ({duracion_pausa} min)</p>", unsafe_allow_html=True)
+        if st.button("🟢 Finalizar Pausa", use_container_width=True):
+            st.session_state.en_pausa = False
+            add_log(f"FIN_PAUSA (Duracion: {duracion_pausa}m)", "ESTADO")
+            st.rerun()
+
+    st.divider()
+    # Carga de Base
     up_file = st.file_uploader("Cargar Base (CSV)", type="csv")
     if up_file and st.session_state.df_contactos is None:
-        try:
-            df = pd.read_csv(up_file, sep=None, engine='python', encoding='utf-8-sig')
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            cols_req = ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada']
-            for c in cols_req:
-                if c not in df.columns: df[c] = 'Pendiente' if c == 'estado' else ''
-            df['agente_id'] = st.session_state.agente_id
-            st.session_state.df_contactos = df
-            add_log("Base cargada correctamente")
-        except Exception as e: add_log(f"Error cargando CSV: {e}", "ERROR")
+        df = pd.read_csv(up_file, sep=None, engine='python', encoding='utf-8-sig')
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada']:
+            if col not in df.columns: df[col] = 'Pendiente' if col == 'estado' else ''
+        st.session_state.df_contactos = df
+        add_log("BASE_CARGADA", "DATA")
 
-    if st.session_state.df_contactos is not None:
-        st.subheader("Descargas")
-        df_full = st.session_state.df_contactos
-        # Reporte Pendientes
-        df_p = df_full[df_full['estado'].isin(['Pendiente', 'No Contesto', 'Programada'])]
-        st.download_button("Descargar Pendientes", df_p.to_csv(index=False).encode('utf-8-sig'), "pendientes.csv", "text/csv")
-        # Reporte Logs
-        st.download_button("Descargar Auditoria", "\n".join(st.session_state.logs), "auditoria.log", "text/plain")
+    if st.button("Cerrar Sesión"):
+        add_log("CIERRE_SESION", "LOGOUT")
+        sync_logs_to_drive()
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.rerun()
 
-# --- 6. PANEL PRINCIPAL ---
-st.markdown("<h2 class='main-header'>Dialer Pro Camacol</h2>", unsafe_allow_html=True)
+# --- 7. MODULO SUPERVISOR (Solo 12345678) ---
+if st.session_state.agente_id == "12345678":
+    with st.expander("PANEL DE SUPERVISIÓN (EXCLUSIVO)"):
+        st.subheader("Métricas Globales de Sesión")
+        if st.session_state.df_contactos is not None:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Base", len(st.session_state.df_contactos))
+            col2.metric("Gestionados", len(st.session_state.df_contactos[st.session_state.df_contactos['estado'] != 'Pendiente']))
+            col3.metric("Logs Generados", len(st.session_state.logs))
+            st.dataframe(st.session_state.df_contactos.head(10))
 
+# --- 8. CUERPO PRINCIPAL ---
 if st.session_state.df_contactos is not None:
-    df = st.session_state.df_contactos
+    # BUSCADOR DE CLIENTES
+    search_query = st.text_input("Buscar cliente (Nombre o Teléfono):").lower()
     
-    # METRICAS
-    m1, m2, m3, m4 = st.columns(4)
-    llamados_hoy = len(df[df['estado'] == 'Llamado'])
-    m1.metric("Pendientes", len(df[df['estado'] == 'Pendiente']))
-    m2.metric("Logrados", llamados_hoy)
-    m3.metric("No Contesto", len(df[df['estado'] == 'No Contesto']))
-    m4.metric("Meta", f"{int((llamados_hoy/st.session_state.meta_diaria)*100)}%")
-
-    st.divider()
-
-    tab_op, tab_log = st.tabs(["Panel de Operacion", "Auditoria de Sistema"])
-
-    with tab_log:
-        st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
-
-    with tab_op:
-        # OPTIMIZACION DE CARGA: Paginacion / Filtros
-        opc = st.radio("Ver lista:", ["Pendientes", "No Contestaron", "Programadas"], horizontal=True)
+    # Filtrado dinámico
+    df_full = st.session_state.df_contactos
+    if search_query:
+        df_filtered = df_full[df_full['nombre'].str.lower().contains(search_query) | df_full['telefono'].astype(str).contains(search_query)]
+    else:
+        opc = st.radio("Lista:", ["Pendientes", "No Contestaron", "Programadas"], horizontal=True)
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada"
-        
-        # Filtrar datos de trabajo
-        df_w = df[df['estado'] == f_est]
-        
-        if not df_w.empty:
-            # PAGINACION: Tomamos solo el primero para procesar
-            idx = df_w.index[0]
-            c = df_w.loc[idx]
-            tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
+        df_filtered = df_full[df_full['estado'] == f_est]
 
-            col_a, col_b = st.columns([2, 1])
-            with col_a:
-                st.markdown(f"""<div class='client-card'>
-                    <h3>{c['nombre']}</h3>
-                    <p><b>Telefono:</b> {tel} | <b>Estado Actual:</b> {c['estado']}</p>
-                </div>""", unsafe_allow_html=True)
-                nota = st.text_area("Notas de gestion:", key=f"note_{idx}")
-                
-                # CALLBACK SCHEDULING
-                exp_c = st.expander("Programar rellamada futura")
-                with exp_c:
-                    c_date = st.date_input("Fecha:", min_value=datetime.now())
-                    c_time = st.time_input("Hora:")
+    if not df_filtered.empty:
+        idx = df_filtered.index[0]
+        c = df_filtered.loc[idx]
+        tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
 
-            with col_b:
+        # PANEL DE OPERACION
+        st.divider()
+        col_info, col_ctrl = st.columns([2, 1])
+
+        with col_info:
+            st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Teléfono: {tel}</p></div>", unsafe_allow_html=True)
+            
+            # AUTO-SAVE NOTAS: Se usa el session_state para persistencia
+            prev_note = st.session_state.draft_notas.get(idx, c['observacion'])
+            nota_input = st.text_area("Notas de gestión:", value=prev_note, key=f"note_{idx}")
+            st.session_state.draft_notas[idx] = nota_input # Guardado en borrador
+
+            # AGENDAMIENTO
+            exp_c = st.expander("Programar Re-llamada")
+            with exp_c:
+                c_date = st.date_input("Fecha:", min_value=datetime.now())
+                c_time = st.time_input("Hora:")
+
+        with col_ctrl:
+            if not st.session_state.en_pausa:
                 if st.session_state.llamada_activa_sid is None:
-                    if st.button("INICIAR LLAMADA (AMD)", type="primary"):
-                        with st.spinner("Conectando con Twilio..."):
-                            try:
-                                call = client.calls.create(
-                                    url=function_url, to=tel, from_=twilio_number,
-                                    machine_detection='Enable', record=True
-                                )
-                                st.session_state.llamada_activa_sid = call.sid
-                                st.session_state.t_inicio_dt = datetime.now()
-                                add_log(f"Llamando a {c['nombre']}")
-                                st.rerun()
-                            except Exception as e:
-                                add_log(f"Error Twilio: {e}", "ERROR")
-                                st.error("No se pudo iniciar la llamada.")
+                    if st.button("INICIAR LLAMADA", type="primary", use_container_width=True):
+                        try:
+                            call = client.calls.create(url=function_url, to=tel, from_=twilio_number, machine_detection='Enable')
+                            st.session_state.llamada_activa_sid = call.sid
+                            st.session_state.t_inicio_dt = datetime.now()
+                            add_log(f"CALL_START: {c['nombre']}", "TWILIO")
+                            st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
                 else:
-                    # FEEDBACK VISUAL DE LLAMADA
+                    # FEEDBACK LLAMADA
                     try:
                         remote = client.calls(st.session_state.llamada_activa_sid).fetch()
-                        status = remote.status
-                        amd = getattr(remote, 'answered_by', 'human')
-                    except: status, amd = "error", "unknown"
-
-                    st.markdown(f"<h2 class='status-active'>{status.upper()}</h2>", unsafe_allow_html=True)
-                    if amd == 'machine_start': st.warning("Contestador detectado")
+                        st.markdown(f"<h1 style='color:red; text-align:center;'>{remote.status.upper()}</h1>", unsafe_allow_html=True)
+                    except: pass
                     
-                    st.link_button("ABRIR FORMULARIO MS", f"{forms_base_url}?id={st.session_state.llamada_activa_sid}")
-
-                    if st.button("FINALIZAR GESTION", type="secondary"):
+                    if st.button("FINALIZAR GESTION", type="secondary", use_container_width=True):
                         try: client.calls(st.session_state.llamada_activa_sid).update(status='completed')
                         except: pass
                         
-                        # CALCULO DURACION
                         dur = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                         
-                        # ACTUALIZAR DATAFRAME LOCAL
+                        # ACTUALIZAR DATAFRAME
                         st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
-                        st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                        st.session_state.df_contactos.at[idx, 'observacion'] = nota_input
                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = datetime.now().strftime("%Y-%m-%d")
                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
                         
-                        if c_date:
-                            st.session_state.df_contactos.at[idx, 'proxima_llamada'] = f"{c_date} {c_time}"
-
-                        # --- LOGICA DE SINCRONIZACION INTELIGENTE (EVITAR DUPLICADOS) ---
+                        # SINCRONIZACION DRIVE (ANTI-DUPLICADOS)
                         if URL_SHEET_INFORME:
                             try:
-                                # 1. Leer datos existentes en Drive
                                 df_drive = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
-                                # 2. Combinar con el nuevo registro
-                                nuevo_reg = st.session_state.df_contactos.loc[[idx]]
-                                df_final = pd.concat([df_drive, nuevo_reg], ignore_index=True)
-                                # 3. Limpiar duplicados por SID
+                                df_final = pd.concat([df_drive, st.session_state.df_contactos.loc[[idx]]], ignore_index=True)
                                 df_final = df_final.drop_duplicates(subset=['sid_llamada'], keep='last')
-                                # 4. Actualizar Drive
                                 conn.update(spreadsheet=URL_SHEET_INFORME, data=df_final)
-                                add_log(f"Sincronizado: {c['nombre']}")
-                            except Exception as e:
-                                add_log(f"Error sincronizacion Drive: {e}", "ERROR")
-                                st.error("Guardado localmente, error al subir a Drive.")
+                                add_log(f"SYNC_SUCCESS: {c['nombre']}", "DATA")
+                                sync_logs_to_drive() # Guardar auditoría tras cada éxito
+                            except Exception as e: add_log(f"SYNC_ERROR: {e}", "ERROR")
 
-                        # WHATSAPP AUTOMATICO
-                        msg_wa = urllib.parse.quote(f"Hola {c['nombre']}, soy de Camacol. Intentamos contactarte.")
-                        st.markdown(f"[ENVIAR WHATSAPP](https://wa.me/{tel.replace('+', '')}?text={msg_wa})")
-
+                        # WHATSAPP
+                        msg_wa = urllib.parse.quote(f"Hola {c['nombre']}, intentamos contactarte de Camacol.")
+                        st.link_button(" ENVIAR WHATSAPP", f"https://wa.me/{tel.replace('+', '')}?text={msg_wa}", use_container_width=True)
+                        
                         st.session_state.llamada_activa_sid = None
                         st.rerun()
+            else:
+                st.warning("Debe finalizar la pausa para llamar.")
 
-                    time.sleep(2)
-                    st.rerun()
-        else:
-            st.success("No hay registros en esta categoria.")
+    # TAB DE LOGS
+    st.divider()
+    with st.expander(" Ver Log de Actividad (Auditoría en tiempo real)"):
+        st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
 else:
-    st.info("Cargue un archivo CSV para comenzar la operacion.")
+    st.info("Cargue un archivo para comenzar.")
