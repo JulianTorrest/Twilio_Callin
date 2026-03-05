@@ -196,27 +196,43 @@ with tab_op:
                     else:
                         # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
                         try:
+                            print(f"[DEBUG] Iniciando monitoreo de llamada...")
                             # 1. Consultar estado real en Twilio
+                            print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
                             remote = client.calls(st.session_state.llamada_activa_sid).fetch()
-                            st.info(f"Estado Twilio: {remote.status}")
+                            print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
+                            st.info(f"📞 Estado Twilio: {remote.status}")
                             
                             # 2. Definir condiciones de terminación
                             # 'no-answer', 'busy', 'failed', 'canceled' son terminaciones de "No contestó"
                             call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
+                            print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
                             
-                            # 3. Accion de Finalización (Manual o Automática)
-                            if st.button("✅ FINALIZAR GESTIÓN") or call_ended_by_system:
-                                
+                            # 3. Mostrar botón solo si la llamada NO ha terminado automáticamente
+                            finalizar_manual = False
+                            if not call_ended_by_system:
+                                finalizar_manual = st.button("✅ FINALIZAR GESTIÓN")
+                            else:
+                                st.warning(f"⚠️ Llamada terminada automáticamente: {remote.status}")
+                            
+                            # 4. Accion de Finalización (Manual o Automática)
+                            print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
+                            if finalizar_manual or call_ended_by_system:
+                                print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
+                                 
                                 # --- DETERMINACIÓN DE ESTADO FINAL ---
                                 final_status = 'Llamado'
                                 if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
                                     final_status = 'No Contesto'
+                                print(f"[DEBUG] Estado final determinado: {final_status}")
                                 
                                 # Calculamos duración
                                 t_fin = datetime.now()
                                 dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
-                                
+                                print(f"[DEBUG] Duración calculada: {dur} segundos")
+                                 
                                 # --- PASO CRÍTICO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
+                                print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
                                 # Esto garantiza que el usuario se mueva de 'Pendiente' a 'No Contesto' en el DF de la sesión
                                 st.session_state.df_contactos.at[idx, 'estado'] = final_status
                                 st.session_state.df_contactos.at[idx, 'observacion'] = nota
@@ -224,24 +240,34 @@ with tab_op:
                                 st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                 st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                 st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
-                                
+                                print(f"[DEBUG] DataFrame actualizado. Estado ahora: {st.session_state.df_contactos.at[idx, 'estado']}")
+                                 
                                 # --- PASO CRÍTICO 2: SINCRONIZACIÓN CON GOOGLE SHEETS ---
+                                print(f"[DEBUG] Iniciando sincronización con Google Sheets")
+                                st.write(f"💾 Guardando gestión: {final_status}")
                                 if URL_SHEET_INFORME:
+                                    print(f"[DEBUG] URL_SHEET_INFORME configurado: {URL_SHEET_INFORME[:50]}...")
                                     try:
                                         st.write("🔄 Iniciando sincronización con Google Sheets...")
                                         
                                         # Preparamos la nueva fila con SOLO las columnas del Google Sheet
                                         # Google Sheet tiene: agente_id, nombre, telefono, estado, observacion, duracion_seg, fecha_llamada, proxima_llamada, sid_llamada
                                         columnas_sheet = ['agente_id', 'nombre', 'telefono', 'estado', 'observacion', 'duracion_seg', 'fecha_llamada', 'proxima_llamada', 'sid_llamada']
-                                        fila_nueva = st.session_state.df_contactos.loc[[idx]].copy()
                                         
                                         # Construir telefono completo para el Sheet (sin codigo_pais separado)
-                                        if 'codigo_pais' in fila_nueva.columns and pd.notna(fila_nueva.iloc[0]['codigo_pais']):
-                                            fila_nueva['telefono'] = '+' + str(fila_nueva.iloc[0]['codigo_pais']).replace('+', '') + str(fila_nueva.iloc[0]['telefono'])
+                                        if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
+                                            tel = '+' + str(c['codigo_pais']).replace('+', '') + str(c['telefono'])
                                         
-                                        # Filtrar solo las columnas que existen en el Sheet
-                                        fila_nueva = fila_nueva[[col for col in columnas_sheet if col in fila_nueva.columns]]
-                                        st.write(f"📝 Fila a guardar: {fila_nueva[['nombre', 'estado', 'sid_llamada']].to_dict('records')}")
+                                        fila_nueva = pd.DataFrame({
+                                            'agente_id': [st.session_state.agente_id],
+                                            'nombre': [c['nombre']],
+                                            'telefono': [tel],
+                                            'estado': [final_status],
+                                            'observacion': [nota],
+                                            'duracion_seg': [dur],
+                                            'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
+                                            'sid_llamada': [st.session_state.llamada_activa_sid]
+                                        })
                                         
                                         # Leemos el estado actual del sheet
                                         try:
@@ -274,37 +300,55 @@ with tab_op:
                                         
                                         # Subimos al Sheet - CRÍTICO: especificar worksheet="0"
                                         st.write(f"💾 Guardando {len(df_actualizado)} registros en Google Sheets...")
+                                        print(f"[DEBUG] Intentando conn.update con {len(df_actualizado)} registros")
                                         conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="0", data=df_actualizado)
+                                        print(f"[DEBUG] conn.update exitoso")
                                         
                                         add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
                                         st.success(f"✅ Guardado exitoso en Google Sheets: {final_status}")
+                                        print(f"[DEBUG] Sincronización completada exitosamente")
                                         
                                     except Exception as e_sync:
                                         import traceback
                                         error_completo = traceback.format_exc()
+                                        print(f"[ERROR] Error en sincronización: {e_sync}")
+                                        print(f"[ERROR] Traceback completo:\n{error_completo}")
                                         st.error(f"❌ Error crítico de sincronización: {e_sync}")
                                         st.write("📋 Detalle completo del error:")
                                         st.code(error_completo)
                                         add_log(f"ERROR_SYNC: {str(e_sync)}", "ERROR")
                                         st.warning("Datos guardados localmente pero no sincronizados con Google Sheets")
-                                
+                                else:
+                                    print(f"[ERROR] URL_SHEET_INFORME no está configurado")
+                                    st.error("⚠️ URL_SHEET_INFORME no está configurado en los secretos")
+                                 
                                 # --- PASO 3: LIMPIEZA DE ESTADO ---
+                                print(f"[DEBUG] Limpiando estado de llamada")
+                                st.write("✅ Limpiando estado y pasando al siguiente contacto...")
                                 st.session_state.llamada_activa_sid = None
-                                time.sleep(1) # Breve pausa para que el usuario vea el mensaje de éxito
+                                print(f"[DEBUG] llamada_activa_sid limpiado, ejecutando rerun")
+                                time.sleep(2) # Pausa para que el usuario vea los mensajes
                                 st.rerun()
-                            
+                             
                             # Bucle de espera activa (Polling)
-                            # Si la llamada sigue 'ringing' o 'in-progress', refrescamos cada 4 segundos
-                            time.sleep(4)
-                            st.rerun()
-                            
+                            # Si la llamada sigue 'ringing' o 'in-progress', refrescamos cada 3 segundos
+                            if not call_ended_by_system:
+                                print(f"[DEBUG] Llamada aún activa, esperando 3 segundos...")
+                                st.write("⏳ Esperando respuesta del cliente...")
+                                time.sleep(3)
+                                st.rerun()
+                            else:
+                                # Si ya terminó, forzar rerun inmediato para procesar
+                                print(f"[DEBUG] Llamada terminada, forzando rerun inmediato")
+                                st.rerun()
+                             
                         except Exception as e_monitor:
+                            import traceback
+                            error_trace = traceback.format_exc()
+                            print(f"[ERROR] Error monitoreando llamada: {e_monitor}")
+                            print(f"[ERROR] Traceback:\n{error_trace}")
                             st.error(f"Error monitoreando llamada: {e_monitor}")
-                            # Si el SID falla o no existe, liberamos la interfaz para no bloquear al agente
-                            st.session_state.llamada_activa_sid = None
-                            st.rerun()
-                else:
-                    st.warning("Finalice la pausa para poder gestionar llamadas.")
+                            st.code(error_trace)
         else:
             st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
     else:
