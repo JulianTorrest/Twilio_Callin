@@ -90,6 +90,8 @@ with st.sidebar:
     if up_file and st.session_state.df_contactos is None:
         df_up = pd.read_csv(up_file, sep=None, engine='python', encoding='utf-8-sig')
         df_up.columns = [str(c).strip().lower() for c in df_up.columns]
+        # El CSV de clientes tiene: nombre, codigo_pais, telefono
+        # Agregamos las columnas que necesita el sistema para trabajar
         for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
             if col not in df_up.columns: df_up[col] = 'Pendiente' if col == 'estado' else ''
         st.session_state.df_contactos = df_up
@@ -166,7 +168,11 @@ with tab_op:
         if not df_work.empty:
             idx = df_work.index[0]
             c = df_work.loc[idx]
-            tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
+            # Construir número completo desde CSV (codigo_pais + telefono)
+            if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
+                tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
+            else:
+                tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
 
             col1, col2 = st.columns([2,1])
             with col1:
@@ -222,24 +228,63 @@ with tab_op:
                                 # --- PASO CRÍTICO 2: SINCRONIZACIÓN CON GOOGLE SHEETS ---
                                 if URL_SHEET_INFORME:
                                     try:
-                                        # Leemos el estado actual del sheet para no sobreescribir otros agentes
-                                        df_gsheet_actual = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
+                                        st.write("🔄 Iniciando sincronización con Google Sheets...")
                                         
-                                        # Preparamos la nueva fila con los datos frescos
+                                        # Preparamos la nueva fila con SOLO las columnas del Google Sheet
+                                        # Google Sheet tiene: agente_id, nombre, telefono, estado, observacion, duracion_seg, fecha_llamada, proxima_llamada, sid_llamada
+                                        columnas_sheet = ['agente_id', 'nombre', 'telefono', 'estado', 'observacion', 'duracion_seg', 'fecha_llamada', 'proxima_llamada', 'sid_llamada']
                                         fila_nueva = st.session_state.df_contactos.loc[[idx]].copy()
                                         
-                                        # Unimos el histórico con el nuevo registro
-                                        df_actualizado = pd.concat([df_gsheet_actual, fila_nueva], ignore_index=True)
+                                        # Construir telefono completo para el Sheet (sin codigo_pais separado)
+                                        if 'codigo_pais' in fila_nueva.columns and pd.notna(fila_nueva.iloc[0]['codigo_pais']):
+                                            fila_nueva['telefono'] = '+' + str(fila_nueva.iloc[0]['codigo_pais']).replace('+', '') + str(fila_nueva.iloc[0]['telefono'])
                                         
-                                        # Eliminamos duplicados basados en el SID para no repetir la misma llamada si hubo reintentos
-                                        df_actualizado = df_actualizado.drop_duplicates(subset=['sid_llamada'], keep='last')
+                                        # Filtrar solo las columnas que existen en el Sheet
+                                        fila_nueva = fila_nueva[[col for col in columnas_sheet if col in fila_nueva.columns]]
+                                        st.write(f"📝 Fila a guardar: {fila_nueva[['nombre', 'estado', 'sid_llamada']].to_dict('records')}")
+                                        
+                                        # Leemos el estado actual del sheet
+                                        try:
+                                            df_gsheet_actual = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
+                                            st.write(f"📊 Registros existentes en Sheet: {len(df_gsheet_actual)}")
+                                        except Exception as e_read:
+                                            st.write(f"⚠️ Sheet vacío o error al leer (normal si es primera vez): {e_read}")
+                                            df_gsheet_actual = pd.DataFrame()
+                                        
+                                        # Unimos el histórico con el nuevo registro
+                                        if df_gsheet_actual.empty:
+                                            st.write("📄 Sheet vacío - creando primer registro")
+                                            df_actualizado = fila_nueva.copy()
+                                        else:
+                                            st.write("➕ Agregando registro al histórico existente")
+                                            # Asegurar que ambos DataFrames tengan las mismas columnas
+                                            for col in columnas_sheet:
+                                                if col not in df_gsheet_actual.columns:
+                                                    df_gsheet_actual[col] = ''
+                                            df_actualizado = pd.concat([df_gsheet_actual, fila_nueva], ignore_index=True)
+                                            
+                                            # Eliminamos duplicados solo si la columna existe y tiene datos
+                                            if 'sid_llamada' in df_actualizado.columns:
+                                                antes = len(df_actualizado)
+                                                df_actualizado = df_actualizado[df_actualizado['sid_llamada'].notna()]
+                                                df_actualizado = df_actualizado.drop_duplicates(subset=['sid_llamada'], keep='last')
+                                                despues = len(df_actualizado)
+                                                if antes != despues:
+                                                    st.write(f"🔄 Duplicados eliminados: {antes - despues}")
                                         
                                         # Subimos al Sheet - CRÍTICO: especificar worksheet="0"
+                                        st.write(f"💾 Guardando {len(df_actualizado)} registros en Google Sheets...")
                                         conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="0", data=df_actualizado)
+                                        
                                         add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
                                         st.success(f"✅ Guardado exitoso en Google Sheets: {final_status}")
+                                        
                                     except Exception as e_sync:
+                                        import traceback
+                                        error_completo = traceback.format_exc()
                                         st.error(f"❌ Error crítico de sincronización: {e_sync}")
+                                        st.write("📋 Detalle completo del error:")
+                                        st.code(error_completo)
                                         add_log(f"ERROR_SYNC: {str(e_sync)}", "ERROR")
                                         st.warning("Datos guardados localmente pero no sincronizados con Google Sheets")
                                 
