@@ -15,24 +15,31 @@ try:
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     
-    # Lista de cédulas autorizadas
-    CEDULAS_AUTORIZADAS = ["12345678", "87654321"] 
+    # Lista de cédulas autorizadas (Asegúrate de que coincidan con las de tus agentes)
+    CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"] 
     
     client = Client(account_sid, auth_token)
 except KeyError:
     st.error("⚠️ Configura los Secrets (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FUNCTION_URL, MS_FORMS_URL) en Streamlit Cloud.")
     st.stop()
 
-# --- 2. CONTROL DE ACCESO ---
+# --- 2. CONTROL DE ACCESO (CORREGIDO PARA EVITAR ERRORES DE VALIDACIÓN) ---
 if 'agente_id' not in st.session_state:
     st.title("🔐 Acceso al Sistema de Llamadas")
-    cedula_input = st.text_input("Ingrese su número de cédula:", type="password")
+    # .strip() elimina espacios accidentales que el usuario o el navegador puedan insertar
+    cedula_input = st.text_input("Ingrese su número de cédula:", type="password").strip()
+    
     if st.button("Ingresar"):
-        if cedula_input in CEDULAS_AUTORIZADAS:
+        # Convertimos toda la lista a string y quitamos espacios para una comparación exacta
+        lista_limpia = [str(c).strip() for c in CEDULAS_AUTORIZADAS]
+        
+        if cedula_input in lista_limpia:
             st.session_state.agente_id = cedula_input
+            st.success(f"✅ Bienvenido, Agente {cedula_input}")
+            time.sleep(0.5)
             st.rerun()
         else:
-            st.error("🚫 Cédula no autorizada.")
+            st.error(f"🚫 Cédula '{cedula_input}' no autorizada.")
     st.stop()
 
 # --- 3. GESTIÓN DE ESTADO (SESSION STATE) ---
@@ -43,7 +50,6 @@ if 'llamada_activa_sid' not in st.session_state:
 if 't_inicio_dt' not in st.session_state:
     st.session_state.t_inicio_dt = None
 if 'df_historico_incremental' not in st.session_state:
-    # Este será nuestro "Track Espejo"
     st.session_state.df_historico_incremental = pd.DataFrame()
 
 st.title("📞 Centro de Llamadas Inteligente")
@@ -127,7 +133,7 @@ if st.session_state.df_contactos is not None:
                             call = client.calls.create(url=function_url, to=num_final, from_=twilio_number, record=True)
                             
                             st.session_state.llamada_activa_sid = call.sid
-                            st.session_state.t_inicio_dt = ahora # Guardamos objeto datetime para calcular duración
+                            st.session_state.t_inicio_dt = ahora 
                             
                             st.session_state.df_contactos.at[idx, 'sid_llamada'] = call.sid
                             st.session_state.df_contactos.at[idx, 'fecha_llamada'] = ahora.strftime("%Y-%m-%d")
