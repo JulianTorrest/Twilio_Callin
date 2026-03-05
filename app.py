@@ -109,6 +109,54 @@ with st.sidebar:
 # --- 5. MODULO DE METRICAS Y DASHBOARDS ---
 st.title("Dialer Pro Camacol")
 
+# --- CONTADORES Y BARRAS DE PROGRESO ---
+if st.session_state.df_contactos is not None:
+    df = st.session_state.df_contactos
+    
+    # Contadores por categoría
+    col1, col2, col3, col4 = st.columns(4)
+    total_pendientes = len(df[df['estado'] == 'Pendiente'])
+    total_no_contestaron = len(df[df['estado'] == 'No Contesto'])
+    total_programadas = len(df[df['estado'] == 'Programada'])
+    total_llamados = len(df[df['estado'] == 'Llamado'])
+    
+    col1.metric("⏳ Pendientes", total_pendientes)
+    col2.metric("📵 No Contestaron", total_no_contestaron)
+    col3.metric("📅 Programadas", total_programadas)
+    col4.metric("✅ Llamados", total_llamados)
+    
+    # Barras de progreso
+    st.divider()
+    prog_col1, prog_col2 = st.columns([3, 1])
+    
+    with prog_col1:
+        # Barra de progreso total
+        total_contactos = len(df)
+        total_gestionados = total_llamados + total_no_contestaron
+        progreso_total = (total_gestionados / total_contactos * 100) if total_contactos > 0 else 0
+        st.write(f"**Progreso Total: {total_gestionados}/{total_contactos} ({progreso_total:.1f}%)**")
+        st.progress(progreso_total / 100)
+        
+        # Barra de progreso diario
+        if 'meta_diaria' not in st.session_state:
+            st.session_state.meta_diaria = 50
+        
+        # Contar llamadas del día actual
+        hoy = datetime.now().strftime("%Y-%m-%d")
+        llamadas_hoy = len(df[(df['fecha_llamada'].astype(str).str.contains(hoy, na=False))])
+        progreso_diario = (llamadas_hoy / st.session_state.meta_diaria * 100) if st.session_state.meta_diaria > 0 else 0
+        st.write(f"**Progreso Diario: {llamadas_hoy}/{st.session_state.meta_diaria} ({progreso_diario:.1f}%)**")
+        st.progress(min(progreso_diario / 100, 1.0))
+    
+    with prog_col2:
+        st.write("**Meta Diaria**")
+        nueva_meta = st.number_input("Llamadas/día:", min_value=1, max_value=500, value=st.session_state.meta_diaria, step=5, key="input_meta")
+        if nueva_meta != st.session_state.meta_diaria:
+            st.session_state.meta_diaria = nueva_meta
+            st.rerun()
+    
+    st.divider()
+
 try:
     # Leemos con bypass de cache para ver actualizaciones inmediatas
     df_historico = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
@@ -184,6 +232,7 @@ with tab_op:
             with col2:
                 if not st.session_state.en_pausa:
                     if st.session_state.llamada_activa_sid is None:
+                        # Botón de llamar
                         if st.button("📞 LLAMAR", type="primary"):
                             try:
                                 call = client.calls.create(url=function_url, to=tel, from_=twilio_number, machine_detection='Enable')
@@ -193,6 +242,24 @@ with tab_op:
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error al iniciar llamada: {e}")
+                        
+                        # Opción de reprogramar
+                        st.divider()
+                        st.write("**📅 Reprogramar Llamada**")
+                        fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
+                        hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
+                        
+                        if st.button("✅ Programar", key=f"prog_{idx}"):
+                            # Combinar fecha y hora
+                            fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                            st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
+                            st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
+                            st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                            st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                            add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                            time.sleep(1)
+                            st.rerun()
                     else:
                         # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
                         try:
@@ -326,7 +393,7 @@ with tab_op:
                                 print(f"[DEBUG] Limpiando estado de llamada")
                                 st.write("✅ Limpiando estado y pasando al siguiente contacto...")
                                 st.session_state.llamada_activa_sid = None
-                                print(f"[DEBUG] llamada_activa_sid limpiado, ejecutando rerun")
+                                print(f"[DEBUG] llamada_activa_sid limpiado")
                                 time.sleep(2) # Pausa para que el usuario vea los mensajes
                                 st.rerun()
                              
@@ -336,10 +403,6 @@ with tab_op:
                                 print(f"[DEBUG] Llamada aún activa, esperando 3 segundos...")
                                 st.write("⏳ Esperando respuesta del cliente...")
                                 time.sleep(3)
-                                st.rerun()
-                            else:
-                                # Si ya terminó, forzar rerun inmediato para procesar
-                                print(f"[DEBUG] Llamada terminada, forzando rerun inmediato")
                                 st.rerun()
                              
                         except Exception as e_monitor:
