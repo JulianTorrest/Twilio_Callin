@@ -46,7 +46,8 @@ def add_log(mensaje, tipo="INFO"):
         try:
             df_logs = pd.DataFrame([l.split(" | ") for l in st.session_state.logs], columns=['Fecha', 'Agente', 'Tipo', 'Evento'])
             conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="Auditoria_Logs", data=df_logs)
-        except: pass
+        except Exception as e_log:
+            print(f"Error guardando log en Sheet: {e_log}")
 
 # --- 3. CONTROL DE ACCESO Y ESTADO ---
 if 'agente_id' not in st.session_state:
@@ -233,13 +234,14 @@ with tab_op:
                                         # Eliminamos duplicados basados en el SID para no repetir la misma llamada si hubo reintentos
                                         df_actualizado = df_actualizado.drop_duplicates(subset=['sid_llamada'], keep='last')
                                         
-                                        # Subimos al Sheet
-                                        conn.update(spreadsheet=URL_SHEET_INFORME, data=df_actualizado)
+                                        # Subimos al Sheet - CRÍTICO: especificar worksheet="0"
+                                        conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="0", data=df_actualizado)
                                         add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
-                                        st.success(f"Guardado exitoso: {final_status}")
+                                        st.success(f"✅ Guardado exitoso en Google Sheets: {final_status}")
                                     except Exception as e_sync:
-                                        st.error(f"Error crítico de sincronización: {e_sync}")
+                                        st.error(f"❌ Error crítico de sincronización: {e_sync}")
                                         add_log(f"ERROR_SYNC: {str(e_sync)}", "ERROR")
+                                        st.warning("Datos guardados localmente pero no sincronizados con Google Sheets")
                                 
                                 # --- PASO 3: LIMPIEZA DE ESTADO ---
                                 st.session_state.llamada_activa_sid = None
