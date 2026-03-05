@@ -8,7 +8,7 @@ import urllib.parse
 import plotly.express as px
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Camacol Dialer Pro v4.5", layout="wide")
+st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
 
 st.markdown("""
     <style>
@@ -59,7 +59,7 @@ if 'agente_id' not in st.session_state:
                 st.rerun()
     st.stop()
 
-# Inicializar estados (Mantenemos todos los tuyos)
+# Inicialización explícita de estados (Mantenemos cada uno de tus estados)
 if 'df_contactos' not in st.session_state: st.session_state.df_contactos = None
 if 'en_pausa' not in st.session_state: st.session_state.en_pausa = False
 if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
@@ -67,7 +67,7 @@ if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
 if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
 if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
     
@@ -107,7 +107,8 @@ with st.sidebar:
 st.title("Dialer Pro Camacol")
 
 try:
-    df_historico = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
+    # Leemos con bypass de cache para ver actualizaciones inmediatas
+    df_historico = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
 except:
     df_historico = pd.DataFrame()
 
@@ -116,15 +117,19 @@ tab_op, tab_met, tab_sup, tab_aud = st.tabs(["📞 Operación", "📊 Mis Métri
 with tab_met:
     st.subheader("Rendimiento del Agente")
     if not df_historico.empty:
-        df_agente = df_historico[df_historico['agente_id'].astype(str) == str(st.session_state.agente_id)]
-        if not df_agente.empty:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Gestionados", len(df_agente))
-            m2.metric("Efectividad", f"{(len(df_agente[df_agente['estado']=='Llamado'])/len(df_agente)*100):.1f}%")
-            m3.metric("Promedio Duración", f"{df_agente['duracion_seg'].astype(float).mean():.1f}s")
-            st.plotly_chart(px.pie(df_agente, names='estado', title="Distribución de Estados"), use_container_width=True)
+        # Aseguramos que la columna agente_id existe para filtrar
+        if 'agente_id' in df_historico.columns:
+            df_agente = df_historico[df_historico['agente_id'].astype(str) == str(st.session_state.agente_id)]
+            if not df_agente.empty:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Gestionados", len(df_agente))
+                m2.metric("Efectividad", f"{(len(df_agente[df_agente['estado']=='Llamado'])/len(df_agente)*100):.1f}%")
+                m3.metric("Promedio Duración", f"{pd.to_numeric(df_agente['duracion_seg'], errors='coerce').mean():.1f}s")
+                st.plotly_chart(px.pie(df_agente, names='estado', title="Distribución de Estados"), use_container_width=True)
+            else:
+                st.info(f"No hay registros en el Sheet para el agente {st.session_state.agente_id}.")
         else:
-            st.info("Aún no tienes registros históricos.")
+            st.error("La columna 'agente_id' no se encuentra en el Sheet de informe.")
     else:
         st.warning("No hay datos en el Sheet de informe.")
 
@@ -142,17 +147,20 @@ with tab_sup:
 with tab_aud:
     st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
 
-# --- 6. OPERACIÓN ---
+# --- 6. OPERACIÓN (BLOQUE EXPANDIDO Y REFORZADO) ---
 with tab_op:
     if st.session_state.df_contactos is not None:
         search = st.text_input("🔍 Buscar Cliente:").lower()
         df = st.session_state.df_contactos
+        
         opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas"], horizontal=True)
+        # Lógica de mapeo de pestaña a estado del DF
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada"
         
+        # Filtrado riguroso
         df_work = df[df['estado'] == f_est]
         if search:
-            df_work = df[df['nombre'].str.lower().str.contains(search) | df['telefono'].astype(str).str.contains(search)]
+            df_work = df_work[df_work['nombre'].str.lower().str.contains(search) | df_work['telefono'].astype(str).str.contains(search)]
 
         if not df_work.empty:
             idx = df_work.index[0]
@@ -176,57 +184,81 @@ with tab_op:
                                 st.session_state.t_inicio_dt = datetime.now()
                                 add_log(f"CALL_START: {c['nombre']}", "TWILIO")
                                 st.rerun()
-                            except Exception as e: st.error(e)
+                            except Exception as e:
+                                st.error(f"Error al iniciar llamada: {e}")
                     else:
-                        # --- MEJORA: DETECCIÓN DINÁMICA DE ESTADO ---
+                        # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
                         try:
+                            # 1. Consultar estado real en Twilio
                             remote = client.calls(st.session_state.llamada_activa_sid).fetch()
                             st.info(f"Estado Twilio: {remote.status}")
                             
-                            # Si la llamada finalizó por parte del sistema (cuelgue natural) 
-                            # o si el agente pulsa el botón manualmente:
+                            # 2. Definir condiciones de terminación
+                            # 'no-answer', 'busy', 'failed', 'canceled' son terminaciones de "No contestó"
                             call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                             
+                            # 3. Accion de Finalización (Manual o Automática)
                             if st.button("✅ FINALIZAR GESTIÓN") or call_ended_by_system:
-                                # Lógica de determinación de estado
+                                
+                                # --- DETERMINACIÓN DE ESTADO FINAL ---
                                 final_status = 'Llamado'
                                 if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
                                     final_status = 'No Contesto'
                                 
-                                dur = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                # Calculamos duración
+                                t_fin = datetime.now()
+                                dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
                                 
-                                # Actualizar localmente
+                                # --- PASO CRÍTICO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
+                                # Esto garantiza que el usuario se mueva de 'Pendiente' a 'No Contesto' en el DF de la sesión
                                 st.session_state.df_contactos.at[idx, 'estado'] = final_status
                                 st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                 st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                 st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
+                                st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
                                 
-                                # SINCRONIZAR SHEET (CRÍTICO - Usando tu lógica de concatenación)
+                                # --- PASO CRÍTICO 2: SINCRONIZACIÓN CON GOOGLE SHEETS ---
                                 if URL_SHEET_INFORME:
                                     try:
-                                        df_dr = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0")
-                                        nuevo_row = st.session_state.df_contactos.loc[[idx]].copy()
-                                        nuevo_row['agente_id'] = st.session_state.agente_id
-                                        nuevo_row['sid_llamada'] = st.session_state.llamada_activa_sid
+                                        # Leemos el estado actual del sheet para no sobreescribir otros agentes
+                                        df_gsheet_actual = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
                                         
-                                        df_fin = pd.concat([df_dr, nuevo_row], ignore_index=True)
-                                        df_fin = df_fin.drop_duplicates(subset=['sid_llamada'], keep='last')
-                                        conn.update(spreadsheet=URL_SHEET_INFORME, data=df_fin)
-                                        add_log(f"SYNC_AUTO: {final_status}", "DATA")
-                                    except Exception as e:
-                                        st.error(f"Error sincronía: {e}")
+                                        # Preparamos la nueva fila con los datos frescos
+                                        fila_nueva = st.session_state.df_contactos.loc[[idx]].copy()
+                                        
+                                        # Unimos el histórico con el nuevo registro
+                                        df_actualizado = pd.concat([df_gsheet_actual, fila_nueva], ignore_index=True)
+                                        
+                                        # Eliminamos duplicados basados en el SID para no repetir la misma llamada si hubo reintentos
+                                        df_actualizado = df_actualizado.drop_duplicates(subset=['sid_llamada'], keep='last')
+                                        
+                                        # Subimos al Sheet
+                                        conn.update(spreadsheet=URL_SHEET_INFORME, data=df_actualizado)
+                                        add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
+                                        st.success(f"Guardado exitoso: {final_status}")
+                                    except Exception as e_sync:
+                                        st.error(f"Error crítico de sincronización: {e_sync}")
+                                        add_log(f"ERROR_SYNC: {str(e_sync)}", "ERROR")
                                 
+                                # --- PASO 3: LIMPIEZA DE ESTADO ---
                                 st.session_state.llamada_activa_sid = None
+                                time.sleep(1) # Breve pausa para que el usuario vea el mensaje de éxito
                                 st.rerun()
                             
-                            # Refresco automático para monitorear el cuelgue (cada 4 seg)
+                            # Bucle de espera activa (Polling)
+                            # Si la llamada sigue 'ringing' o 'in-progress', refrescamos cada 4 segundos
                             time.sleep(4)
                             st.rerun()
                             
-                        except Exception as e:
+                        except Exception as e_monitor:
+                            st.error(f"Error monitoreando llamada: {e_monitor}")
+                            # Si el SID falla o no existe, liberamos la interfaz para no bloquear al agente
                             st.session_state.llamada_activa_sid = None
                             st.rerun()
                 else:
-                    st.warning("Finalice la pausa.")
+                    st.warning("Finalice la pausa para poder gestionar llamadas.")
+        else:
+            st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
     else:
-        st.info("Cargue CSV.")
+        st.info("Por favor, cargue un archivo CSV en el sidebar para comenzar la operación.")
