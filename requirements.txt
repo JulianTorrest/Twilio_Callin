@@ -3,3 +3,5 @@ twilio
 pandas
 st-gsheets-connection
 plotly
+gspread
+oauth2client
