@@ -219,4 +219,4 @@ with tab_op:
                                 st.rerun()
                         except: pass
                 else: st.warning("Finalice la pausa.")
-    else: st.info("Cargue CSV.")info("Cargue un archivo CSV para iniciar.")
+    else: st.info("Cargue CSV.")
