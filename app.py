@@ -29,6 +29,8 @@ try:
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
+    URL_SHEET_CONTACTOS = st.secrets.get("GSHEET_CONTACTOS_URL")
+    GDRIVE_LOGS_FOLDER_ID = st.secrets.get("GDRIVE_LOGS_FOLDER_ID")
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"]
     client = Client(account_sid, auth_token)
     
@@ -36,9 +38,14 @@ try:
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
     gc = gspread.authorize(creds)
-    # Extraer el ID del Sheet de la URL
-    sheet_id = URL_SHEET_INFORME.split('/d/')[1].split('/')[0]
-    spreadsheet = gc.open_by_key(sheet_id)
+    
+    # Abrir Sheet de Informe (donde se guardan los resultados)
+    sheet_id_informe = URL_SHEET_INFORME.split('/d/')[1].split('/')[0]
+    spreadsheet = gc.open_by_key(sheet_id_informe)
+    
+    # Abrir Sheet de Contactos (de donde se leen los contactos por agente)
+    sheet_id_contactos = URL_SHEET_CONTACTOS.split('/d/')[1].split('/')[0]
+    spreadsheet_contactos = gc.open_by_key(sheet_id_contactos)
 except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
@@ -67,6 +74,84 @@ def update_sheet(df, worksheet_name="0"):
         print(f"Error escribiendo sheet: {e}")
         return False
 
+def cargar_contactos_agente(cedula_agente):
+    """Carga contactos desde Google Sheets filtrados por cedula_agente"""
+    try:
+        # Leer todos los contactos del Sheet
+        worksheet = spreadsheet_contactos.get_worksheet(0)
+        data = worksheet.get_all_values()
+        
+        if len(data) <= 1:
+            print(f"[DEBUG] Sheet de contactos vacío")
+            return pd.DataFrame()
+        
+        # Crear DataFrame
+        df_todos = pd.DataFrame(data[1:], columns=data[0])
+        print(f"[DEBUG] Total contactos en sheet: {len(df_todos)}")
+        
+        # Filtrar por cedula_agente
+        df_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(cedula_agente)].copy()
+        print(f"[DEBUG] Contactos para agente {cedula_agente}: {len(df_agente)}")
+        
+        # Agregar columnas necesarias para el sistema
+        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
+            if col not in df_agente.columns:
+                df_agente[col] = 'Pendiente' if col == 'estado' else ''
+        
+        # Asignar agente_id
+        df_agente['agente_id'] = cedula_agente
+        
+        return df_agente
+    except Exception as e:
+        print(f"[ERROR] Error cargando contactos: {e}")
+        return pd.DataFrame()
+
+def guardar_logs_en_drive():
+    """Guarda los logs en un archivo de texto en Google Drive"""
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaInMemoryUpload
+        from io import BytesIO
+        
+        # Crear contenido del log
+        log_content = "\n".join(st.session_state.logs)
+        
+        # Crear nombre de archivo con timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"log_agente_{st.session_state.agente_id}_{timestamp}.txt"
+        
+        # Construir servicio de Drive
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        # Crear metadata del archivo
+        file_metadata = {
+            'name': filename,
+            'parents': [GDRIVE_LOGS_FOLDER_ID]
+        }
+        
+        # Crear media upload
+        media = MediaInMemoryUpload(
+            log_content.encode('utf-8'),
+            mimetype='text/plain',
+            resumable=True
+        )
+        
+        # Subir archivo
+        file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, name, webViewLink'
+        ).execute()
+        
+        print(f"[DEBUG] Logs guardados en Drive: {file.get('name')} (ID: {file.get('id')})")
+        print(f"[DEBUG] Link: {file.get('webViewLink')}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Error guardando logs en Drive: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return False
+
 # --- 3. AUDITORIA AUTOMATICA ---
 if 'logs' not in st.session_state: st.session_state.logs = []
 
@@ -74,8 +159,8 @@ def add_log(mensaje, tipo="INFO"):
     t_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"{t_stamp} | {st.session_state.get('agente_id', 'SYS')} | {tipo} | {mensaje}"
     st.session_state.logs.append(entry)
-    # Logs se guardan solo en memoria para evitar sobrecarga en Google Sheets
-    pass
+    # Imprimir en consola de Streamlit Cloud para debugging
+    print(f"[LOG] {entry}")
 
 # --- 3. CONTROL DE ACCESO Y ESTADO ---
 if 'agente_id' not in st.session_state:
@@ -85,6 +170,13 @@ if 'agente_id' not in st.session_state:
             if ced in CEDULAS_AUTORIZADAS:
                 st.session_state.agente_id = ced
                 add_log("LOGIN_EXITOSO", "AUTH")
+                # Cargar contactos automáticamente al iniciar sesión
+                with st.spinner("Cargando tus contactos asignados..."):
+                    st.session_state.df_contactos = cargar_contactos_agente(ced)
+                    if not st.session_state.df_contactos.empty:
+                        add_log(f"CONTACTOS_CARGADOS: {len(st.session_state.df_contactos)} contactos", "DATA")
+                    else:
+                        add_log("SIN_CONTACTOS_ASIGNADOS", "DATA")
                 st.rerun()
     st.stop()
 
@@ -114,22 +206,32 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    up_file = st.file_uploader("Cargar Base", type="csv")
-    if up_file and st.session_state.df_contactos is None:
-        df_up = pd.read_csv(up_file, sep=None, engine='python', encoding='utf-8-sig')
-        df_up.columns = [str(c).strip().lower() for c in df_up.columns]
-        # El CSV de clientes tiene: nombre, codigo_pais, telefono
-        # Agregamos las columnas que necesita el sistema para trabajar
-        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
-            if col not in df_up.columns: df_up[col] = 'Pendiente' if col == 'estado' else ''
-        st.session_state.df_contactos = df_up
-        add_log("BASE_CARGADA", "DATA")
+    # Botón para recargar contactos desde Google Sheets
+    if st.button("🔄 Recargar Contactos"):
+        with st.spinner("Recargando contactos..."):
+            st.session_state.df_contactos = cargar_contactos_agente(st.session_state.agente_id)
+            if not st.session_state.df_contactos.empty:
+                add_log(f"CONTACTOS_RECARGADOS: {len(st.session_state.df_contactos)} contactos", "DATA")
+                st.success(f"✅ {len(st.session_state.df_contactos)} contactos cargados")
+            else:
+                st.warning("⚠️ No hay contactos asignados a tu cédula")
+            time.sleep(1)
+            st.rerun()
 
     if st.session_state.df_contactos is not None:
         df_pend = st.session_state.df_contactos[st.session_state.df_contactos['estado'].isin(['Pendiente', 'No Contesto'])]
         st.download_button("📥 Descargar Pendientes", df_pend.to_csv(index=False).encode('utf-8-sig'), "pendientes.csv")
 
+    # Botón para guardar logs
+    if st.button("💾 Guardar Logs"):
+        if guardar_logs_en_drive():
+            st.success("✅ Logs guardados en Drive")
+        else:
+            st.error("❌ Error guardando logs")
+    
     if st.button("Cerrar Sesión"):
+        # Guardar logs antes de cerrar sesión
+        guardar_logs_en_drive()
         add_log("LOGOUT", "AUTH")
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
