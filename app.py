@@ -280,85 +280,109 @@ with tab_op:
     if 'webrtc_token' not in st.session_state:
         st.session_state.webrtc_token = None
     
-    # JavaScript para Twilio Device (WebRTC) - TODO EN UN COMPONENTE
+    # JavaScript para Twilio Device (WebRTC) - SDK v2.11
     twilio_webrtc_component = f"""
     <div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
         <span id="device-status">🔴 Inicializando audio...</span>
     </div>
     
-    <script src="https://sdk.twilio.com/js/client/releases/1.14.0/twilio.min.js"></script>
+    <script src="https://sdk.twilio.com/js/client/v2.11/twilio.min.js"></script>
     <script>
         var device;
         var currentConnection;
         
         // Función para obtener token y configurar device
-        function initTwilioDevice() {{
+        async function initTwilioDevice() {{
             var statusEl = document.getElementById('device-status');
             if (!statusEl) {{
                 console.error('Elemento device-status no encontrado');
                 return;
             }}
             
-            statusEl.innerHTML = '🟡 Conectando con Twilio...';
-            
-            // Obtener token y configurar Twilio Device
-            fetch('https://mis-metricas-voz-5007.twil.io/token?identity={st.session_state.agente_id}')
-                .then(response => {{
-                    if (!response.ok) throw new Error('Error obteniendo token');
-                    return response.json();
-                }})
-                .then(data => {{
-                    console.log('Token obtenido exitosamente');
-                    
-                    device = Twilio.Device.setup(data.token, {{
-                        codecPreferences: ['opus', 'pcmu'],
-                        fakeLocalDTMF: true,
-                        enableRingingState: true,
-                        debug: true
-                    }});
-                    
-                    device.on('ready', function() {{
-                        console.log('Twilio Device listo');
-                        if (statusEl) statusEl.innerHTML = '🟢 Audio listo - WebRTC conectado';
-                    }});
-                    
-                    device.on('error', function(error) {{
-                        console.error('Error Twilio Device:', error);
-                        if (statusEl) statusEl.innerHTML = '🔴 Error: ' + (error.message || 'Error desconocido');
-                    }});
-                    
-                    device.on('connect', function(conn) {{
-                        console.log('Llamada conectada');
-                        currentConnection = conn;
-                        if (statusEl) statusEl.innerHTML = '📞 En llamada - ' + (conn.parameters.To || 'Conectado');
-                    }});
-                    
-                    device.on('disconnect', function() {{
-                        console.log('Llamada desconectada');
-                        if (statusEl) statusEl.innerHTML = '🟢 Audio listo - Llamada finalizada';
-                    }});
-                }})
-                .catch(error => {{
-                    console.error('Error inicializando Twilio:', error);
-                    if (statusEl) statusEl.innerHTML = '🔴 Error: ' + error.message;
+            try {{
+                statusEl.innerHTML = '🟡 Conectando con Twilio...';
+                
+                // Obtener token
+                const response = await fetch('https://mis-metricas-voz-5007.twil.io/token?identity={st.session_state.agente_id}');
+                if (!response.ok) throw new Error('Error obteniendo token');
+                
+                const data = await response.json();
+                console.log('Token obtenido exitosamente');
+                
+                // Crear Device con SDK v2.x
+                device = new Twilio.Device(data.token, {{
+                    codecPreferences: [Twilio.Device.CodecName.Opus, Twilio.Device.CodecName.PCMU],
+                    logLevel: 1,
+                    edge: 'ashburn'
                 }});
+                
+                // Registrar Device
+                await device.register();
+                
+                // Event listeners
+                device.on('registered', function() {{
+                    console.log('Twilio Device registrado y listo');
+                    if (statusEl) statusEl.innerHTML = '🟢 Audio listo - WebRTC conectado';
+                }});
+                
+                device.on('error', function(error) {{
+                    console.error('Error Twilio Device:', error);
+                    if (statusEl) statusEl.innerHTML = '🔴 Error: ' + (error.message || 'Error desconocido');
+                }});
+                
+                device.on('incoming', function(call) {{
+                    console.log('Llamada entrante');
+                    call.accept();
+                }});
+                
+            }} catch(error) {{
+                console.error('Error inicializando Twilio:', error);
+                if (statusEl) statusEl.innerHTML = '� Error: ' + error.message;
+            }}
         }}
         
         // Función para iniciar llamada con WebRTC
-        function llamarWebRTC(numero) {{
+        async function llamarWebRTC(numero) {{
             console.log('Intentando llamar a:', numero);
-            if (device && device.status() === 'ready') {{
-                try {{
-                    currentConnection = device.connect({{
+            var statusEl = document.getElementById('device-status');
+            
+            if (!device) {{
+                alert('Device no inicializado');
+                return;
+            }}
+            
+            try {{
+                // Conectar llamada con SDK v2.x
+                const call = await device.connect({{
+                    params: {{
                         To: numero
-                    }});
-                    console.log('Llamada iniciada');
-                }} catch(e) {{
-                    console.error('Error al conectar:', e);
-                    alert('Error al iniciar llamada: ' + e.message);
-                }}
-            }} else {{
-                alert('Device no está listo. Estado: ' + (device ? device.status() : 'no inicializado'));
+                    }}
+                }});
+                
+                currentConnection = call;
+                console.log('Llamada iniciada');
+                if (statusEl) statusEl.innerHTML = '� Llamando a ' + numero;
+                
+                // Event listeners de la llamada
+                call.on('accept', function() {{
+                    console.log('Llamada aceptada');
+                    if (statusEl) statusEl.innerHTML = '� En llamada - ' + numero;
+                }});
+                
+                call.on('disconnect', function() {{
+                    console.log('Llamada desconectada');
+                    if (statusEl) statusEl.innerHTML = '🟢 Audio listo - Llamada finalizada';
+                    currentConnection = null;
+                }});
+                
+                call.on('error', function(error) {{
+                    console.error('Error en llamada:', error);
+                    if (statusEl) statusEl.innerHTML = '🔴 Error en llamada: ' + error.message;
+                }});
+                
+            }} catch(e) {{
+                console.error('Error al conectar:', e);
+                alert('Error al iniciar llamada: ' + e.message);
             }}
         }}
         
@@ -367,9 +391,7 @@ with tab_op:
             console.log('Colgando llamada');
             if (currentConnection) {{
                 currentConnection.disconnect();
-            }}
-            if (device) {{
-                device.disconnectAll();
+                currentConnection = null;
             }}
         }}
         
@@ -377,7 +399,6 @@ with tab_op:
         if (document.readyState === 'loading') {{
             document.addEventListener('DOMContentLoaded', initTwilioDevice);
         }} else {{
-            // DOM ya está listo
             setTimeout(initTwilioDevice, 100);
         }}
     </script>
@@ -385,7 +406,6 @@ with tab_op:
     
     import streamlit.components.v1 as components
     components.html(twilio_webrtc_component, height=50)
-    
 with tab_op:
     if st.session_state.df_contactos is not None:
         search = st.text_input("🔍 Buscar Cliente:").lower()
