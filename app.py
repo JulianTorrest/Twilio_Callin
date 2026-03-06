@@ -280,13 +280,12 @@ with tab_op:
     if 'webrtc_token' not in st.session_state:
         st.session_state.webrtc_token = None
     
-    # Mostrar componente de audio WebRTC
-    st.markdown("""<div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
-        <span id="device-status">🔴 Audio desconectado</span>
-    </div>""", unsafe_allow_html=True)
-    
-    # JavaScript para Twilio Device (WebRTC)
+    # JavaScript para Twilio Device (WebRTC) - TODO EN UN COMPONENTE
     twilio_webrtc_component = f"""
+    <div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
+        <span id="device-status">🔴 Inicializando audio...</span>
+    </div>
+    
     <script src="https://sdk.twilio.com/js/client/releases/1.14.0/twilio.min.js"></script>
     <script>
         var device;
@@ -294,49 +293,78 @@ with tab_op:
         
         // Función para obtener token y configurar device
         function initTwilioDevice() {{
+            var statusEl = document.getElementById('device-status');
+            if (!statusEl) {{
+                console.error('Elemento device-status no encontrado');
+                return;
+            }}
+            
+            statusEl.innerHTML = '🟡 Conectando con Twilio...';
+            
             // Obtener token y configurar Twilio Device
             fetch('https://mis-metricas-voz-5007.twil.io/token?identity={st.session_state.agente_id}')
-                .then(response => response.json())
+                .then(response => {{
+                    if (!response.ok) throw new Error('Error obteniendo token');
+                    return response.json();
+                }})
                 .then(data => {{
+                    console.log('Token obtenido exitosamente');
+                    
                     device = Twilio.Device.setup(data.token, {{
                         codecPreferences: ['opus', 'pcmu'],
                         fakeLocalDTMF: true,
-                        enableRingingState: true
+                        enableRingingState: true,
+                        debug: true
                     }});
                     
-                    device.ready(function() {{
-                        document.getElementById('device-status').innerHTML = '🟢 Audio listo - WebRTC conectado';
+                    device.on('ready', function() {{
+                        console.log('Twilio Device listo');
+                        if (statusEl) statusEl.innerHTML = '🟢 Audio listo - WebRTC conectado';
                     }});
                     
-                    device.error(function(error) {{
+                    device.on('error', function(error) {{
                         console.error('Error Twilio Device:', error);
-                        document.getElementById('device-status').innerHTML = '🔴 Error: ' + error.message;
+                        if (statusEl) statusEl.innerHTML = '🔴 Error: ' + (error.message || 'Error desconocido');
                     }});
                     
-                    device.connect(function(conn) {{
+                    device.on('connect', function(conn) {{
+                        console.log('Llamada conectada');
                         currentConnection = conn;
-                        document.getElementById('device-status').innerHTML = '📞 En llamada - ' + conn.parameters.To;
+                        if (statusEl) statusEl.innerHTML = '📞 En llamada - ' + (conn.parameters.To || 'Conectado');
                     }});
                     
-                    device.disconnect(function() {{
-                        document.getElementById('device-status').innerHTML = '🟢 Audio listo - Llamada finalizada';
+                    device.on('disconnect', function() {{
+                        console.log('Llamada desconectada');
+                        if (statusEl) statusEl.innerHTML = '🟢 Audio listo - Llamada finalizada';
                     }});
+                }})
+                .catch(error => {{
+                    console.error('Error inicializando Twilio:', error);
+                    if (statusEl) statusEl.innerHTML = '🔴 Error: ' + error.message;
                 }});
         }}
         
         // Función para iniciar llamada con WebRTC
         function llamarWebRTC(numero) {{
-            if (device) {{
-                currentConnection = device.connect({{
-                    To: numero
-                }});
+            console.log('Intentando llamar a:', numero);
+            if (device && device.status() === 'ready') {{
+                try {{
+                    currentConnection = device.connect({{
+                        To: numero
+                    }});
+                    console.log('Llamada iniciada');
+                }} catch(e) {{
+                    console.error('Error al conectar:', e);
+                    alert('Error al iniciar llamada: ' + e.message);
+                }}
             }} else {{
-                alert('Device no inicializado. Configura el Access Token primero.');
+                alert('Device no está listo. Estado: ' + (device ? device.status() : 'no inicializado'));
             }}
         }}
         
         // Función para colgar
         function colgarWebRTC() {{
+            console.log('Colgando llamada');
             if (currentConnection) {{
                 currentConnection.disconnect();
             }}
@@ -345,13 +373,18 @@ with tab_op:
             }}
         }}
         
-        // Inicializar al cargar
-        initTwilioDevice(); // Inicializa WebRTC automáticamente
+        // Inicializar cuando el DOM esté listo
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', initTwilioDevice);
+        }} else {{
+            // DOM ya está listo
+            setTimeout(initTwilioDevice, 100);
+        }}
     </script>
     """
     
     import streamlit.components.v1 as components
-    components.html(twilio_webrtc_component, height=0)
+    components.html(twilio_webrtc_component, height=50)
     
 with tab_op:
     if st.session_state.df_contactos is not None:
