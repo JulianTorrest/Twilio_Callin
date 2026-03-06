@@ -468,11 +468,32 @@ with tab_op:
                                 print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
                                  
                                 # --- DETERMINACIÓN DE ESTADO FINAL ---
+                                # Obtener answered_by para detectar si contestó una persona o máquina
+                                answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
+                                print(f"[DEBUG] answered_by: {answered_by}, status: {remote.status}")
+                                
+                                # Determinar estado basado en answered_by y status
                                 final_status = 'Llamado'
+                                
+                                # Si no contestó o fue máquina/buzón = No Contesto
                                 if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
                                     final_status = 'No Contesto'
-                                print(f"[DEBUG] Estado final determinado: {final_status}")
+                                elif answered_by in ['machine_start', 'fax', 'unknown']:
+                                    # Si contestó una máquina o buzón de voz = No Contesto
+                                    final_status = 'No Contesto'
+                                    print(f"[DEBUG] Detectado como máquina/buzón: {answered_by}")
+                                elif answered_by == 'human':
+                                    # Solo si contestó un humano = Llamado
+                                    final_status = 'Llamado'
+                                    print(f"[DEBUG] Detectado como humano")
+                                else:
+                                    # Si el status es completed pero no sabemos quién contestó, asumimos que no contestó
+                                    if remote.status == 'completed' and answered_by == 'unknown':
+                                        final_status = 'No Contesto'
+                                        print(f"[DEBUG] Status completed pero answered_by unknown - marcando como No Contesto")
                                 
+                                print(f"[DEBUG] Estado final determinado: {final_status}")
+                                 
                                 # Calculamos duración
                                 t_fin = datetime.now()
                                 dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
