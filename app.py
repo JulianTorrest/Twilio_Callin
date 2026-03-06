@@ -67,15 +67,34 @@ def read_sheet(worksheet_name="0"):
         print(f"Error leyendo sheet: {e}")
         return pd.DataFrame()
 
-def update_sheet(df, worksheet_name="0"):
-    """Escribe datos a Google Sheets usando gspread"""
+def update_sheet(df, worksheet_name="0", sheet_url=None):
+    """Escribe datos a Google Sheets usando gspread
+    
+    Args:
+        df: DataFrame a escribir
+        worksheet_name: Nombre o índice del worksheet (default "0")
+        sheet_url: URL del Google Sheet (opcional, usa spreadsheet por defecto)
+    """
     try:
-        worksheet = spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else spreadsheet.worksheet(worksheet_name)
+        # Determinar qué spreadsheet usar
+        if sheet_url:
+            # Abrir el spreadsheet específico desde la URL
+            target_spreadsheet = gc.open_by_url(sheet_url)
+        else:
+            # Usar el spreadsheet por defecto (Informe)
+            target_spreadsheet = spreadsheet
+        
+        # Obtener el worksheet
+        worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
+        
+        # Limpiar y actualizar
         worksheet.clear()
         worksheet.update([df.columns.values.tolist()] + df.values.tolist())
         return True
     except Exception as e:
         print(f"Error escribiendo sheet: {e}")
+        import traceback
+        print(traceback.format_exc())
         return False
 
 def cargar_contactos_agente(cedula_agente):
@@ -111,10 +130,14 @@ def cargar_contactos_agente(cedula_agente):
             print(f"[DEBUG] No hay contactos asignados al agente {cedula_agente}")
             return pd.DataFrame(columns=columnas_requeridas)
         
-        # Agregar columnas necesarias para el sistema
+        # Agregar columnas necesarias para el sistema si no existen
         for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
             if col not in df_agente.columns:
-                df_agente[col] = 'Pendiente' if col == 'estado' else ''
+                df_agente[col] = ''
+        
+        # Si el campo estado está vacío, asignar 'Pendiente' para el filtro de la UI
+        # Esto permite que contactos sin gestionar aparezcan en "Pendientes"
+        df_agente['estado'] = df_agente['estado'].fillna('').replace('', 'Pendiente')
         
         # Asignar agente_id
         df_agente['agente_id'] = cedula_agente
@@ -577,369 +600,347 @@ with tab_op:
         df_work = df_work.iloc[inicio:fin]
 
         if not df_work.empty:
-            idx = df_work.index[0]
-            c = df_work.loc[idx]
-            # Construir número completo desde CSV (codigo_pais + telefono)
-            if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
-                tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
-            else:
-                tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
+            # Mostrar TODOS los contactos de la página (hasta 30)
+            st.write(f"**Mostrando {len(df_work)} contactos:**")
+            
+            # Iterar sobre TODOS los contactos de la página
+            for idx in df_work.index:
+                c = df_work.loc[idx]
+                # Construir número completo desde CSV (codigo_pais + telefono)
+                if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
+                    tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
+                else:
+                    tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
 
-            col1, col2 = st.columns([2,1])
-            with col1:
-                st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
-                val_n = st.session_state.draft_notas.get(idx, c['observacion'])
-                nota = st.text_area("Notas:", value=val_n, key=f"n_{idx}")
-                st.session_state.draft_notas[idx] = nota
+                # Crear un expander para cada contacto
+                with st.expander(f"📞 {c['nombre']} - {tel}", expanded=False):
+                    col1, col2 = st.columns([2,1])
+                    with col1:
+                        st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
+                        val_n = st.session_state.draft_notas.get(idx, c['observacion'])
+                        nota = st.text_area("Notas:", value=val_n, key=f"n_{idx}")
+                        st.session_state.draft_notas[idx] = nota
 
-            with col2:
-                if not st.session_state.en_pausa:
-                    if st.session_state.llamada_activa_sid is None:
-                        # Botones de llamar (Server-Side y WebRTC)
-                        call_col1, call_col2 = st.columns(2)
-                        
-                        # Botón único de llamada con Conference Call
-                        if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True):
-                            try:
-                                # Crear conference call: Twilio llama primero al agente, luego al cliente
-                                # El cliente verá el número del agente como Caller ID
-                                
-                                # Paso 1: Llamar al agente primero
-                                print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
-                                
-                                # Crear TwiML para la conferencia
-                                twiml_conference = f"""
-                                <?xml version="1.0" encoding="UTF-8"?>
-                                <Response>
-                                    <Say language="es-MX">Conectando con el cliente</Say>
-                                    <Dial>
-                                        <Conference 
-                                            startConferenceOnEnter="true"
-                                            endConferenceOnExit="true"
-                                            record="record-from-start"
-                                            recordingStatusCallback="{function_url}/recording-status"
-                                        >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
-                                    </Dial>
-                                </Response>
-                                """
-                                
-                                # Llamar al agente
-                                call_agente = client.calls.create(
-                                    twiml=twiml_conference,
-                                    to=st.session_state.numero_celular_agente,
-                                    from_=twilio_number,
-                                    status_callback=f"{function_url}/status",
-                                    status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                )
-                                
-                                # Esperar 2 segundos para que el agente conteste
-                                time.sleep(2)
-                                
-                                # Paso 2: Llamar al cliente con el número del agente como Caller ID
-                                print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
-                                
-                                call_cliente = client.calls.create(
-                                    twiml=twiml_conference,
-                                    to=tel,
-                                    from_=st.session_state.numero_celular_agente,  # Caller ID = número del agente
-                                    machine_detection='Enable',
-                                    status_callback=f"{function_url}/status",
-                                    status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                )
-                                
-                                # Guardar el SID de la llamada del cliente (para tracking)
-                                st.session_state.llamada_activa_sid = call_cliente.sid
-                                st.session_state.t_inicio_dt = datetime.now()
-                                
-                                add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
-                                st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al iniciar llamada: {e}")
-                                print(f"[ERROR] Error en conference call: {e}")
-                                import traceback
-                                print(traceback.format_exc())
-                        
-                        # Opción de reprogramar
-                        st.divider()
-                        st.write("**📅 Reprogramar Llamada**")
-                        fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
-                        hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
-                        
-                        if st.button("✅ Programar", key=f"prog_{idx}"):
-                            # Combinar fecha y hora
-                            fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
-                            st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
-                            st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
-                            st.session_state.df_contactos.at[idx, 'observacion'] = nota
-                            st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                            add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
-                            time.sleep(1)
-                            st.rerun()
-                    else:
-                        # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
-                        try:
-                            print(f"[DEBUG] Iniciando monitoreo de llamada...")
-                            
-                            # CRONÓMETRO EN TIEMPO REAL
-                            tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                            minutos = tiempo_transcurrido // 60
-                            segundos = tiempo_transcurrido % 60
-                            st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
-                            
-                            # 1. Consultar estado real en Twilio
-                            print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
-                            remote = client.calls(st.session_state.llamada_activa_sid).fetch()
-                            print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
-                            st.info(f"📞 Estado Twilio: {remote.status}")
-                            
-                            # 2. Definir condiciones de terminación
-                            # 'no-answer', 'busy', 'failed', 'canceled' son terminaciones de "No contestó"
-                            call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
-                            print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
-                            
-                            # 3. Mostrar botones durante llamada activa
-                            finalizar_manual = False
-                            pausar_grabacion = False
-                            
-                            if not call_ended_by_system:
-                                # Mostrar botones en columnas
-                                btn_col1, btn_col2 = st.columns(2)
-                                with btn_col1:
-                                    finalizar_manual = st.button("✅ FINALIZAR GESTIÓN", type="primary")
-                                with btn_col2:
-                                    if not st.session_state.grabacion_pausada:
-                                        pausar_grabacion = st.button("⏸️ PAUSAR GRABACIÓN")
-                                    else:
-                                        st.info("🔴 Grabación pausada")
-                                
-                                # Manejar pausa de grabación
-                                if pausar_grabacion:
+                    with col2:
+                        if not st.session_state.en_pausa:
+                            if st.session_state.llamada_activa_sid is None:
+                                # Botón único de llamada con Conference Call (ACTIVO)
+                                if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True, key=f"call_{idx}"):
                                     try:
-                                        # Pausar la grabación usando Twilio API
-                                        recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
-                                        if recordings:
-                                            # Pausar la grabación activa
-                                            client.recordings(recordings[0].sid).update(status='paused')
-                                            st.session_state.grabacion_pausada = True
-                                            add_log(f"GRABACION_PAUSADA: {c['nombre']}", "ACCION")
-                                            st.success("✅ Grabación pausada")
-                                            time.sleep(1)
-                                            st.rerun()
+                                        # Crear conference call: Twilio llama primero al agente, luego al cliente
+                                        # El cliente verá el número del agente como Caller ID
+                                         
+                                        # Paso 1: Llamar al agente primero
+                                        print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
+                                 
+                                        # Crear TwiML para la conferencia
+                                        twiml_conference = f"""
+                                        <?xml version="1.0" encoding="UTF-8"?>
+                                        <Response>
+                                            <Say language="es-MX">Conectando con el cliente</Say>
+                                            <Dial>
+                                                <Conference 
+                                                    startConferenceOnEnter="true"
+                                                    endConferenceOnExit="true"
+                                                    record="record-from-start"
+                                                    recordingStatusCallback="{function_url}/recording-status"
+                                                >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
+                                            </Dial>
+                                        </Response>
+                                        """
+                                        
+                                        # Llamar al agente
+                                        call_agente = client.calls.create(
+                                            twiml=twiml_conference,
+                                            to=st.session_state.numero_celular_agente,
+                                            from_=twilio_number,
+                                            status_callback=f"{function_url}/status",
+                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                        )
+                                        
+                                        # Esperar 2 segundos para que el agente conteste
+                                        time.sleep(2)
+                                        
+                                        # Paso 2: Llamar al cliente con el número del agente como Caller ID
+                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
+                                        
+                                        call_cliente = client.calls.create(
+                                            twiml=twiml_conference,
+                                            to=tel,
+                                            from_=st.session_state.numero_celular_agente,  # Caller ID = número del agente
+                                            machine_detection='Enable',
+                                            status_callback=f"{function_url}/status",
+                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                        )
+                                        
+                                        # Guardar el SID de la llamada del cliente (para tracking)
+                                        st.session_state.llamada_activa_sid = call_cliente.sid
+                                        st.session_state.t_inicio_dt = datetime.now()
+                                        
+                                        add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
+                                        st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
+                                        time.sleep(1)
+                                        st.rerun()
                                     except Exception as e:
-                                        st.error(f"Error pausando grabación: {e}")
-                                        print(f"[ERROR] Error pausando grabación: {e}")
-                            else:
-                                st.warning(f"⚠️ Llamada terminada automáticamente: {remote.status}")
-                            
-                            # 4. Accion de Finalización (Manual o Automática)
-                            print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
-                            if finalizar_manual or call_ended_by_system:
-                                print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
-                                 
-                                # --- DETERMINACIÓN DE ESTADO FINAL ---
-                                # Obtener answered_by para detectar si contestó una persona o máquina
-                                answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
-                                print(f"[DEBUG] answered_by: {answered_by}, status: {remote.status}")
-                                
-                                # Determinar estado basado en answered_by y status
-                                final_status = 'Llamado'
-                                
-                                # Si no contestó o fue máquina/buzón = No Contesto
-                                if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
-                                    final_status = 'No Contesto'
-                                elif answered_by in ['machine_start', 'fax', 'unknown']:
-                                    # Si contestó una máquina o buzón de voz = No Contesto
-                                    final_status = 'No Contesto'
-                                    print(f"[DEBUG] Detectado como máquina/buzón: {answered_by}")
-                                elif answered_by == 'human':
-                                    # Solo si contestó un humano = Llamado
-                                    final_status = 'Llamado'
-                                    print(f"[DEBUG] Detectado como humano")
-                                else:
-                                    # Si el status es completed pero no sabemos quién contestó, asumimos que no contestó
-                                    if remote.status == 'completed' and answered_by == 'unknown':
-                                        final_status = 'No Contesto'
-                                        print(f"[DEBUG] Status completed pero answered_by unknown - marcando como No Contesto")
-                                
-                                print(f"[DEBUG] Estado final determinado: {final_status}")
-                                 
-                                # Calculamos duración
-                                t_fin = datetime.now()
-                                dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
-                                print(f"[DEBUG] Duración calculada: {dur} segundos")
-                                 
-                                # --- PASO CRÍTICO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
-                                print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                # Esto garantiza que el usuario se mueva de 'Pendiente' a 'No Contesto' en el DF de la sesión
-                                st.session_state.df_contactos.at[idx, 'estado'] = final_status
-                                st.session_state.df_contactos.at[idx, 'observacion'] = nota
-                                st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
-                                st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                                st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
-                                st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
-                                print(f"[DEBUG] DataFrame actualizado. Estado ahora: {st.session_state.df_contactos.at[idx, 'estado']}")
-                                 
-                                # --- PASO CRÍTICO 2: SINCRONIZACIÓN CON GOOGLE SHEETS ---
-                                print(f"[DEBUG] Iniciando sincronización con Google Sheets")
-                                st.write(f"💾 Guardando gestión: {final_status}")
-                                if URL_SHEET_INFORME:
-                                    print(f"[DEBUG] URL_SHEET_INFORME configurado: {URL_SHEET_INFORME[:50]}...")
-                                    try:
-                                        st.write("🔄 Iniciando sincronización con Google Sheets...")
-                                        
-                                        # Preparamos la nueva fila con SOLO las columnas del Google Sheet
-                                        # Google Sheet tiene: agente_id, nombre, telefono, estado, observacion, duracion_seg, fecha_llamada, proxima_llamada, sid_llamada, url_grabacion, precio_llamada, duracion_facturada, estado_respuesta, codigo_error, parent_call_sid, caller_name, forwarded_from, queue_time, annotation
-                                        columnas_sheet = ['agente_id', 'nombre', 'telefono', 'estado', 'observacion', 'duracion_seg', 'fecha_llamada', 'proxima_llamada', 'sid_llamada', 'url_grabacion', 'precio_llamada', 'duracion_facturada', 'estado_respuesta', 'codigo_error', 'parent_call_sid', 'caller_name', 'forwarded_from', 'queue_time', 'annotation']
-                                        
-                                        # Construir telefono completo para el Sheet (sin codigo_pais separado)
-                                        if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
-                                            tel = '+' + str(c['codigo_pais']).replace('+', '') + str(c['telefono'])
-                                        
-                                        # Obtener información adicional de Twilio
-                                        url_grabacion = ''
-                                        precio_llamada = ''
-                                        duracion_facturada = ''
-                                        estado_respuesta = ''
-                                        codigo_error = ''
-                                        parent_call_sid = ''
-                                        caller_name = ''
-                                        forwarded_from = ''
-                                        queue_time = ''
-                                        annotation = ''
-                                        
-                                        try:
-                                            # Obtener grabaciones de la llamada
-                                            recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
-                                            if recordings:
-                                                # URL de la grabación (formato MP3)
-                                                url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
-                                            
-                                            # Información adicional del objeto remote que ya tenemos
-                                            precio_llamada = str(remote.price) if remote.price else '0'
-                                            duracion_facturada = str(remote.duration) if remote.duration else '0'
-                                            estado_respuesta = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
-                                            codigo_error = str(remote.error_code) if remote.error_code else ''
-                                            
-                                            # Campos adicionales de Twilio
-                                            parent_call_sid = str(remote.parent_call_sid) if remote.parent_call_sid else ''
-                                            caller_name = str(remote.caller_name) if hasattr(remote, 'caller_name') and remote.caller_name else ''
-                                            forwarded_from = str(remote.forwarded_from) if remote.forwarded_from else ''
-                                            queue_time = str(remote.queue_time) if hasattr(remote, 'queue_time') and remote.queue_time else '0'
-                                            
-                                            # Annotation: registrar si la grabación fue pausada
-                                            annotation = str(remote.annotation) if hasattr(remote, 'annotation') and remote.annotation else ''
-                                            if st.session_state.grabacion_pausada:
-                                                annotation = 'GRABACION_PAUSADA' if not annotation else f"{annotation}; GRABACION_PAUSADA"
-                                            
-                                            print(f"[DEBUG] Datos Twilio - Grabación: {url_grabacion}, Precio: {precio_llamada}, Duración facturada: {duracion_facturada}")
-                                            print(f"[DEBUG] Datos adicionales - Parent SID: {parent_call_sid}, Caller Name: {caller_name}, Queue Time: {queue_time}")
-                                        except Exception as e_twilio:
-                                            print(f"[DEBUG] Error obteniendo datos adicionales de Twilio: {e_twilio}")
-                                        
-                                        fila_nueva = pd.DataFrame({
-                                            'agente_id': [st.session_state.agente_id],
-                                            'nombre': [c['nombre']],
-                                            'telefono': [tel],
-                                            'estado': [final_status],
-                                            'observacion': [nota],
-                                            'duracion_seg': [dur],
-                                            'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                            'proxima_llamada': [''],
-                                            'sid_llamada': [st.session_state.llamada_activa_sid],
-                                            'url_grabacion': [url_grabacion],
-                                            'precio_llamada': [precio_llamada],
-                                            'duracion_facturada': [duracion_facturada],
-                                            'estado_respuesta': [estado_respuesta],
-                                            'codigo_error': [codigo_error],
-                                            'parent_call_sid': [parent_call_sid],
-                                            'caller_name': [caller_name],
-                                            'forwarded_from': [forwarded_from],
-                                            'queue_time': [queue_time],
-                                            'annotation': [annotation]
-                                        })
-                                        
-                                        # Leemos el estado actual del sheet
-                                        try:
-                                            df_gsheet_actual = read_sheet("0")
-                                            st.write(f"📊 Registros existentes en Sheet: {len(df_gsheet_actual)}")
-                                        except Exception as e_read:
-                                            st.write(f"⚠️ Sheet vacío o error al leer (normal si es primera vez): {e_read}")
-                                            df_gsheet_actual = pd.DataFrame()
-                                        
-                                        # Unimos el histórico con el nuevo registro
-                                        if df_gsheet_actual.empty:
-                                            st.write("📄 Sheet vacío - creando primer registro")
-                                            df_actualizado = fila_nueva.copy()
-                                        else:
-                                            st.write("➕ Agregando registro al histórico existente")
-                                            # Asegurar que ambos DataFrames tengan las mismas columnas
-                                            for col in columnas_sheet:
-                                                if col not in df_gsheet_actual.columns:
-                                                    df_gsheet_actual[col] = ''
-                                            df_actualizado = pd.concat([df_gsheet_actual, fila_nueva], ignore_index=True)
-                                            
-                                            # Eliminamos duplicados solo si la columna existe y tiene datos
-                                            if 'sid_llamada' in df_actualizado.columns:
-                                                antes = len(df_actualizado)
-                                                df_actualizado = df_actualizado[df_actualizado['sid_llamada'].notna()]
-                                                df_actualizado = df_actualizado.drop_duplicates(subset=['sid_llamada'], keep='last')
-                                                despues = len(df_actualizado)
-                                                if antes != despues:
-                                                    st.write(f"🔄 Duplicados eliminados: {antes - despues}")
-                                        
-                                        # Subimos al Sheet - CRÍTICO: especificar worksheet="0"
-                                        st.write(f"💾 Guardando {len(df_actualizado)} registros en Google Sheets...")
-                                        print(f"[DEBUG] Intentando update_sheet con {len(df_actualizado)} registros")
-                                        if update_sheet(df_actualizado, "0"):
-                                            print(f"[DEBUG] update_sheet exitoso")
-                                        else:
-                                            raise Exception("Error en update_sheet")
-                                        
-                                        add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
-                                        st.success(f"✅ Guardado exitoso en Google Sheets: {final_status}")
-                                        print(f"[DEBUG] Sincronización completada exitosamente")
-                                        
-                                    except Exception as e_sync:
+                                        st.error(f"Error al iniciar llamada: {e}")
+                                        print(f"[ERROR] Error en conference call: {e}")
                                         import traceback
-                                        error_completo = traceback.format_exc()
-                                        print(f"[ERROR] Error en sincronización: {e_sync}")
-                                        print(f"[ERROR] Traceback completo:\n{error_completo}")
-                                        st.error(f"❌ Error crítico de sincronización: {e_sync}")
-                                        st.write("📋 Detalle completo del error:")
-                                        st.code(error_completo)
-                                        add_log(f"ERROR_SYNC: {str(e_sync)}", "ERROR")
-                                        st.warning("Datos guardados localmente pero no sincronizados con Google Sheets")
-                                else:
-                                    print(f"[ERROR] URL_SHEET_INFORME no está configurado")
-                                    st.error("⚠️ URL_SHEET_INFORME no está configurado en los secretos")
-                                 
-                                # --- PASO 3: LIMPIEZA DE ESTADO ---
-                                print(f"[DEBUG] Limpiando estado de llamada")
-                                st.write("✅ Limpiando estado y pasando al siguiente contacto...")
-                                st.session_state.llamada_activa_sid = None
-                                st.session_state.grabacion_pausada = False  # Resetear para próxima llamada
-                                print(f"[DEBUG] llamada_activa_sid limpiado")
-                                time.sleep(2) # Pausa para que el usuario vea los mensajes
-                                st.rerun()
-                             
-                            # Bucle de espera activa (Polling)
-                            # Si la llamada sigue 'ringing' o 'in-progress', refrescamos cada 3 segundos
-                            if not call_ended_by_system:
-                                print(f"[DEBUG] Llamada aún activa, esperando 3 segundos...")
-                                st.write("⏳ Esperando respuesta del cliente...")
-                                time.sleep(3)
-                                st.rerun()
-                             
-                        except Exception as e_monitor:
-                            import traceback
-                            error_trace = traceback.format_exc()
-                            print(f"[ERROR] Error monitoreando llamada: {e_monitor}")
-                            print(f"[ERROR] Traceback:\n{error_trace}")
-                            st.error(f"Error monitoreando llamada: {e_monitor}")
-                            st.code(error_trace)
+                                        print(traceback.format_exc())
+                                # ============================================================
+                                # BOTONES ALTERNATIVOS (COMENTADOS - DISPONIBLES SI SE NECESITAN)
+                                # ============================================================
+                                # Para activar estos botones, descomenta el código y comenta el botón Conference Call
+                                
+                                # --- OPCIÓN 1: Botón Server-Side (Llamada directa sin Conference) ---
+                                # if st.button("📞 LLAMAR (Server)", type="primary", use_container_width=True, key=f"call_server_{idx}"):
+                                #     try:
+                                #         call = client.calls.create(
+                                #             url=function_url, 
+                                #             to=tel, 
+                                #             from_=twilio_number, 
+                                #             machine_detection='Enable', 
+                                #             record=True
+                                #         )
+                                #         st.session_state.llamada_activa_sid = call.sid
+                                #         st.session_state.t_inicio_dt = datetime.now()
+                                #         add_log(f"CALL_START: {c['nombre']}", "TWILIO")
+                                #         st.rerun()
+                                #     except Exception as e:
+                                #         st.error(f"Error al iniciar llamada: {e}")
+                                
+                                # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) ---
+                                # st.markdown(f"""
+                                # <button onclick="llamarWebRTC('{tel}')" style="
+                                #     background: #00A86B;
+                                #     color: white;
+                                #     border: none;
+                                #     padding: 10px 20px;
+                                #     border-radius: 5px;
+                                #     cursor: pointer;
+                                #     font-size: 16px;
+                                #     width: 100%;
+                                # ">🎧 LLAMAR (WebRTC)</button>
+                                # """, unsafe_allow_html=True)
+                                # ============================================================
+                                
+                                # Opción de reprogramar
+                                st.divider()
+                                st.write("**📅 Reprogramar Llamada**")
+                                fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
+                                hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
+                                
+                                if st.button("✅ Programar", key=f"prog_{idx}"):
+                                    # Combinar fecha y hora
+                                    fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                                    st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
+                                    st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
+                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                    st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                    add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                                    st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                    time.sleep(1)
+                                    st.rerun()
+                            else:
+                                # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
+                                try:
+                                    print(f"[DEBUG] Iniciando monitoreo de llamada...")
+                                    
+                                    # CRONÓMETRO EN TIEMPO REAL
+                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                    minutos = tiempo_transcurrido // 60
+                                    segundos = tiempo_transcurrido % 60
+                                    st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                    
+                                    # 1. Consultar estado real en Twilio
+                                    print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
+                                    remote = client.calls(st.session_state.llamada_activa_sid).fetch()
+                                    print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
+                                    st.info(f"📞 Estado Twilio: {remote.status}")
+                                    
+                                    # 2. Definir condiciones de terminación
+                                    # 'no-answer', 'busy', 'failed', 'canceled' son terminaciones de "No contestó"
+                                    call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
+                                    print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
+                                    
+                                    # 3. Mostrar botones durante llamada activa
+                                    finalizar_manual = False
+                                    pausar_grabacion = False
+                                    
+                                    if not call_ended_by_system:
+                                        # Mostrar botones en columnas
+                                        btn_col1, btn_col2 = st.columns(2)
+                                        with btn_col1:
+                                            finalizar_manual = st.button("✅ FINALIZAR GESTIÓN", type="primary")
+                                        with btn_col2:
+                                            if not st.session_state.grabacion_pausada:
+                                                pausar_grabacion = st.button("⏸️ PAUSAR GRABACIÓN")
+                                            else:
+                                                st.info("🔴 Grabación pausada")
+                                        
+                                        # Manejar pausa de grabación
+                                        if pausar_grabacion:
+                                            try:
+                                                # Pausar la grabación usando Twilio API
+                                                recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
+                                                if recordings:
+                                                    # Pausar la grabación activa
+                                                    client.recordings(recordings[0].sid).update(status='paused')
+                                                    st.session_state.grabacion_pausada = True
+                                                    add_log(f"GRABACION_PAUSADA: {c['nombre']}", "ACCION")
+                                                    st.success("✅ Grabación pausada")
+                                                    time.sleep(1)
+                                                    st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Error pausando grabación: {e}")
+                                    else:
+                                        st.warning(f"⚠️ Llamada terminada automáticamente: {remote.status}")
+                                    
+                                    # 4. Accion de Finalización (Manual o Automática)
+                                    print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
+                                    if finalizar_manual or call_ended_by_system:
+                                        print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
+                                        
+                                        # Obtener answered_by para detectar si contestó una persona o máquina
+                                        answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
+                                        print(f"[DEBUG] answered_by: {answered_by}, status: {remote.status}")
+                                        
+                                        # Determinar estado basado en answered_by y status
+                                        final_status = 'Llamado'
+                                        
+                                        if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
+                                            final_status = 'No Contesto'
+                                        elif answered_by in ['machine_start', 'fax', 'unknown']:
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Detectado como máquina/buzón: {answered_by}")
+                                        elif answered_by == 'human':
+                                            final_status = 'Llamado'
+                                            print(f"[DEBUG] Detectado como humano")
+                                        else:
+                                            if remote.status == 'completed' and answered_by == 'unknown':
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Status completed pero answered_by unknown - marcando como No Contesto")
+                                        
+                                        print(f"[DEBUG] Estado final determinado: {final_status}")
+                                        
+                                        # Calculamos duración
+                                        t_fin = datetime.now()
+                                        dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
+                                        print(f"[DEBUG] Duración calculada: {dur} segundos")
+                                        
+                                        # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
+                                        print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
+                                        st.session_state.df_contactos.at[idx, 'estado'] = final_status
+                                        st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                        st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
+                                        st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                        st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
+                                        st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
+                                        print(f"[DEBUG] DataFrame local actualizado. Estado: {final_status}")
+                                        
+                                        # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
+                                        print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
+                                        st.write(f"💾 Guardando gestión: {final_status}")
+                                        
+                                        if URL_SHEET_INFORME:
+                                            try:
+                                                st.write("🔄 Sincronizando con Sheet Informe...")
+                                                
+                                                # Obtener información adicional de Twilio
+                                                url_grabacion = ''
+                                                precio_llamada = '0'
+                                                duracion_facturada = '0'
+                                                estado_respuesta = answered_by
+                                                codigo_error = ''
+                                                
+                                                try:
+                                                    recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
+                                                    if recordings:
+                                                        url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                                    
+                                                    precio_llamada = str(remote.price) if remote.price else '0'
+                                                    duracion_facturada = str(remote.duration) if remote.duration else '0'
+                                                    codigo_error = str(remote.error_code) if remote.error_code else ''
+                                                except Exception as e_twilio:
+                                                    print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
+                                                
+                                                # Preparar fila para Sheet Informe
+                                                fila_informe = pd.DataFrame({
+                                                    'agente_id': [st.session_state.agente_id],
+                                                    'nombre': [c['nombre']],
+                                                    'telefono': [tel],
+                                                    'estado': [final_status],
+                                                    'observacion': [nota],
+                                                    'duracion_seg': [dur],
+                                                    'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
+                                                    'sid_llamada': [st.session_state.llamada_activa_sid],
+                                                    'url_grabacion': [url_grabacion],
+                                                    'precio_llamada': [precio_llamada],
+                                                    'duracion_facturada': [duracion_facturada],
+                                                    'estado_respuesta': [estado_respuesta],
+                                                    'codigo_error': [codigo_error]
+                                                })
+                                                
+                                                # Leer Sheet Informe actual
+                                                try:
+                                                    df_informe_actual = read_sheet("0")
+                                                    st.write(f"📊 Registros en Informe: {len(df_informe_actual)}")
+                                                except:
+                                                    df_informe_actual = pd.DataFrame()
+                                                
+                                                # Agregar nuevo registro
+                                                if df_informe_actual.empty:
+                                                    df_informe_actualizado = fila_informe.copy()
+                                                else:
+                                                    df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
+                                                
+                                                # Guardar en Sheet Informe
+                                                if update_sheet(df_informe_actualizado, "0"):
+                                                    st.success(f"✅ Guardado en Sheet Informe: {final_status}")
+                                                    add_log(f"SYNC_INFORME: {c['nombre']} - {final_status}", "DATA")
+                                                else:
+                                                    st.warning("⚠️ Error guardando en Sheet Informe")
+                                                    
+                                            except Exception as e_informe:
+                                                st.error(f"❌ Error en Sheet Informe: {e_informe}")
+                                                print(f"[ERROR] Sync Informe: {e_informe}")
+                                        
+                                        # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
+                                        print(f"[DEBUG] Actualizando estado en Sheet Llamadas")
+                                        if URL_SHEET_CONTACTOS:
+                                            try:
+                                                st.write("🔄 Actualizando estado en Sheet Llamadas...")
+                                                
+                                                # Actualizar el DataFrame completo y escribirlo de vuelta
+                                                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas")
+                                                    add_log(f"UPDATE_LLAMADAS: {c['nombre']} - {final_status}", "DATA")
+                                                else:
+                                                    st.warning("⚠️ Error actualizando Sheet Llamadas")
+                                                    
+                                            except Exception as e_llamadas:
+                                                st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
+                                                print(f"[ERROR] Update Llamadas: {e_llamadas}")
+                                        
+                                        # --- PASO 4: LIMPIEZA DE ESTADO ---
+                                        print(f"[DEBUG] Limpiando estado de llamada")
+                                        st.write("✅ Gestión completada - Pasando al siguiente contacto...")
+                                        st.session_state.llamada_activa_sid = None
+                                        st.session_state.grabacion_pausada = False
+                                        time.sleep(2)
+                                        st.rerun()
+    
+                                    # Bucle de espera activa
+                                    if not call_ended_by_system:
+                                        st.write("⏳ Esperando respuesta del cliente...")
+                                        st.rerun()
+                                
+                                except Exception as e_monitor:
+                                    import traceback
+                                    error_trace = traceback.format_exc()
+                                    print(f"[ERROR] Error monitoreando llamada: {e_monitor}")
+                                    print(f"[ERROR] Traceback:\n{error_trace}")
+                                    st.error(f"Error monitoreando llamada: {e_monitor}")
+                                    st.code(error_trace)
         else:
             st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
     else:
