@@ -660,13 +660,13 @@ with tab_op:
                                         # Esperar 2 segundos para que el agente conteste
                                         time.sleep(2)
                                         
-                                        # Paso 2: Llamar al cliente usando número de Twilio (no requiere verificación)
-                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {twilio_number}")
+                                        # Paso 2: Llamar al cliente usando número del agente como Caller ID
+                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
                                         
                                         call_cliente = client.calls.create(
                                             twiml=twiml_conference,
                                             to=tel,
-                                            from_=twilio_number,  # Usar número de Twilio (evita verificación)
+                                            from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
                                             machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
