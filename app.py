@@ -290,8 +290,8 @@ with st.sidebar:
             st.error("❌ Error guardando logs")
     
     if st.button("Cerrar Sesión"):
-        # Guardar logs antes de cerrar sesión
-        guardar_logs_en_drive()
+        # Guardar logs deshabilitado para evitar quota de Drive
+        # Si necesitas guardar logs, usa el botón "💾 Guardar Logs" antes de cerrar sesión
         add_log("LOGOUT", "AUTH")
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
