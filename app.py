@@ -206,6 +206,8 @@ if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
 if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
 if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
 if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
+if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
+if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
 
 # --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
@@ -516,7 +518,47 @@ with tab_op:
         # Filtrado riguroso
         df_work = df[df['estado'] == f_est]
         if search:
-            df_work = df_work[df_work['nombre'].str.lower().str.contains(search) | df_work['telefono'].astype(str).str.contains(search)]
+            # Buscar en nombre o en teléfono (sin código de país, ej: 300xxxxxxx)
+            df_work = df_work[
+                df_work['nombre'].str.lower().str.contains(search, na=False) | 
+                df_work['telefono'].astype(str).str.contains(search, na=False) |
+                df_work['telefono'].astype(str).str.replace('+57', '', regex=False).str.contains(search, na=False)
+            ]
+        
+        # Paginación: 30 contactos por página
+        CONTACTOS_POR_PAGINA = 30
+        total_contactos = len(df_work)
+        total_paginas = (total_contactos - 1) // CONTACTOS_POR_PAGINA + 1 if total_contactos > 0 else 1
+        
+        # Resetear página si cambia el filtro
+        if 'ultimo_filtro' not in st.session_state:
+            st.session_state.ultimo_filtro = f_est
+        if st.session_state.ultimo_filtro != f_est:
+            st.session_state.pagina_actual = 0
+            st.session_state.ultimo_filtro = f_est
+        
+        # Asegurar que la página actual esté en rango
+        if st.session_state.pagina_actual >= total_paginas:
+            st.session_state.pagina_actual = max(0, total_paginas - 1)
+        
+        # Mostrar controles de paginación si hay más de 30 contactos
+        if total_contactos > CONTACTOS_POR_PAGINA:
+            col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
+            with col_pag1:
+                if st.button("⬅️ Anterior", disabled=st.session_state.pagina_actual == 0):
+                    st.session_state.pagina_actual -= 1
+                    st.rerun()
+            with col_pag2:
+                st.write(f"**Página {st.session_state.pagina_actual + 1} de {total_paginas}** ({total_contactos} contactos)")
+            with col_pag3:
+                if st.button("Siguiente ➡️", disabled=st.session_state.pagina_actual >= total_paginas - 1):
+                    st.session_state.pagina_actual += 1
+                    st.rerun()
+        
+        # Obtener contactos de la página actual
+        inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
+        fin = inicio + CONTACTOS_POR_PAGINA
+        df_work = df_work.iloc[inicio:fin]
 
         if not df_work.empty:
             idx = df_work.index[0]
@@ -604,10 +646,37 @@ with tab_op:
                             call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                             print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
                             
-                            # 3. Mostrar botón solo si la llamada NO ha terminado automáticamente
+                            # 3. Mostrar botones durante llamada activa
                             finalizar_manual = False
+                            pausar_grabacion = False
+                            
                             if not call_ended_by_system:
-                                finalizar_manual = st.button("✅ FINALIZAR GESTIÓN")
+                                # Mostrar botones en columnas
+                                btn_col1, btn_col2 = st.columns(2)
+                                with btn_col1:
+                                    finalizar_manual = st.button("✅ FINALIZAR GESTIÓN", type="primary")
+                                with btn_col2:
+                                    if not st.session_state.grabacion_pausada:
+                                        pausar_grabacion = st.button("⏸️ PAUSAR GRABACIÓN")
+                                    else:
+                                        st.info("🔴 Grabación pausada")
+                                
+                                # Manejar pausa de grabación
+                                if pausar_grabacion:
+                                    try:
+                                        # Pausar la grabación usando Twilio API
+                                        recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
+                                        if recordings:
+                                            # Pausar la grabación activa
+                                            client.recordings(recordings[0].sid).update(status='paused')
+                                            st.session_state.grabacion_pausada = True
+                                            add_log(f"GRABACION_PAUSADA: {c['nombre']}", "ACCION")
+                                            st.success("✅ Grabación pausada")
+                                            time.sleep(1)
+                                            st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error pausando grabación: {e}")
+                                        print(f"[ERROR] Error pausando grabación: {e}")
                             else:
                                 st.warning(f"⚠️ Llamada terminada automáticamente: {remote.status}")
                             
@@ -705,7 +774,11 @@ with tab_op:
                                             caller_name = str(remote.caller_name) if hasattr(remote, 'caller_name') and remote.caller_name else ''
                                             forwarded_from = str(remote.forwarded_from) if remote.forwarded_from else ''
                                             queue_time = str(remote.queue_time) if hasattr(remote, 'queue_time') and remote.queue_time else '0'
+                                            
+                                            # Annotation: registrar si la grabación fue pausada
                                             annotation = str(remote.annotation) if hasattr(remote, 'annotation') and remote.annotation else ''
+                                            if st.session_state.grabacion_pausada:
+                                                annotation = 'GRABACION_PAUSADA' if not annotation else f"{annotation}; GRABACION_PAUSADA"
                                             
                                             print(f"[DEBUG] Datos Twilio - Grabación: {url_grabacion}, Precio: {precio_llamada}, Duración facturada: {duracion_facturada}")
                                             print(f"[DEBUG] Datos adicionales - Parent SID: {parent_call_sid}, Caller Name: {caller_name}, Queue Time: {queue_time}")
@@ -793,6 +866,7 @@ with tab_op:
                                 print(f"[DEBUG] Limpiando estado de llamada")
                                 st.write("✅ Limpiando estado y pasando al siguiente contacto...")
                                 st.session_state.llamada_activa_sid = None
+                                st.session_state.grabacion_pausada = False  # Resetear para próxima llamada
                                 print(f"[DEBUG] llamada_activa_sid limpiado")
                                 time.sleep(2) # Pausa para que el usuario vea los mensajes
                                 st.rerun()
