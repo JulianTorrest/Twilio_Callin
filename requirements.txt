@@ -5,3 +5,4 @@ st-gsheets-connection
 plotly
 gspread
 oauth2client
+google-api-python-client
