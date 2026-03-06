@@ -286,7 +286,7 @@ with tab_op:
         <span id="device-status">🔴 Inicializando audio...</span>
     </div>
     
-    <script src="https://sdk.twilio.com/js/client/v2.11/twilio.min.js"></script>
+    <script src="https://sdk.twilio.com/js/client/v2.11/twilio.min.js" onload="console.log('Twilio SDK cargado'); setTimeout(initTwilioDevice, 100);" onerror="console.error('Error cargando Twilio SDK');"></script>
     <script>
         var device;
         var currentConnection;
@@ -296,6 +296,14 @@ with tab_op:
             var statusEl = document.getElementById('device-status');
             if (!statusEl) {{
                 console.error('Elemento device-status no encontrado');
+                setTimeout(initTwilioDevice, 200);
+                return;
+            }}
+            
+            // Verificar que Twilio esté disponible
+            if (typeof Twilio === 'undefined') {{
+                console.log('Esperando a que Twilio se cargue...');
+                setTimeout(initTwilioDevice, 200);
                 return;
             }}
             
@@ -337,70 +345,11 @@ with tab_op:
                 
             }} catch(error) {{
                 console.error('Error inicializando Twilio:', error);
-                if (statusEl) statusEl.innerHTML = '� Error: ' + error.message;
+                if (statusEl) statusEl.innerHTML = '🔴 Error: ' + error.message;
             }}
         }}
         
-        // Función para iniciar llamada con WebRTC
-        async function llamarWebRTC(numero) {{
-            console.log('Intentando llamar a:', numero);
-            var statusEl = document.getElementById('device-status');
-            
-            if (!device) {{
-                alert('Device no inicializado');
-                return;
-            }}
-            
-            try {{
-                // Conectar llamada con SDK v2.x
-                const call = await device.connect({{
-                    params: {{
-                        To: numero
-                    }}
-                }});
-                
-                currentConnection = call;
-                console.log('Llamada iniciada');
-                if (statusEl) statusEl.innerHTML = '� Llamando a ' + numero;
-                
-                // Event listeners de la llamada
-                call.on('accept', function() {{
-                    console.log('Llamada aceptada');
-                    if (statusEl) statusEl.innerHTML = '� En llamada - ' + numero;
-                }});
-                
-                call.on('disconnect', function() {{
-                    console.log('Llamada desconectada');
-                    if (statusEl) statusEl.innerHTML = '🟢 Audio listo - Llamada finalizada';
-                    currentConnection = null;
-                }});
-                
-                call.on('error', function(error) {{
-                    console.error('Error en llamada:', error);
-                    if (statusEl) statusEl.innerHTML = '🔴 Error en llamada: ' + error.message;
-                }});
-                
-            }} catch(e) {{
-                console.error('Error al conectar:', e);
-                alert('Error al iniciar llamada: ' + e.message);
-            }}
-        }}
-        
-        // Función para colgar
-        function colgarWebRTC() {{
-            console.log('Colgando llamada');
-            if (currentConnection) {{
-                currentConnection.disconnect();
-                currentConnection = null;
-            }}
-        }}
-        
-        // Inicializar cuando el DOM esté listo
-        if (document.readyState === 'loading') {{
-            document.addEventListener('DOMContentLoaded', initTwilioDevice);
-        }} else {{
-            setTimeout(initTwilioDevice, 100);
-        }}
+        // La inicialización se hace desde el evento onload del script de Twilio
     </script>
     """
     
