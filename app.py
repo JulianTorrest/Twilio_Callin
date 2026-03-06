@@ -163,7 +163,7 @@ try:
 except:
     df_historico = pd.DataFrame()
 
-tab_op, tab_met, tab_sup, tab_aud = st.tabs(["📞 Operación", "📊 Mis Métricas", "👤 Supervisor", "📜 Auditoría"])
+tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
 
 with tab_met:
     st.subheader("Rendimiento del Agente")
@@ -198,7 +198,161 @@ with tab_sup:
 with tab_aud:
     st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
 
-# --- 6. OPERACIÓN (BLOQUE EXPANDIDO Y REFORZADO) ---
+# --- TAB DE PRUEBAS ---
+with tab_pruebas:
+    st.subheader("🧪 Módulo de Pruebas de Llamadas")
+    st.write("Prueba la calidad de las llamadas con Click-to-Call")
+    
+    col_test1, col_test2 = st.columns(2)
+    
+    with col_test1:
+        st.write("**Configuración de Llamada de Prueba**")
+        numero_destino = st.text_input("📱 Número Destino (a quién llamar):", value="+57", key="test_destino")
+        numero_origen = st.text_input("📞 Número Origen (tu número):", value="+57", key="test_origen")
+        
+        st.info("""**Cómo funciona:**
+        1. Twilio llama primero al **Número Destino**
+        2. Si contesta, Twilio llama al **Número Origen** (tú)
+        3. Cuando contestas, se conectan ambas llamadas
+        4. Al destino le aparece el Número Origen en el Caller ID
+        """)
+    
+    with col_test2:
+        st.write("**Iniciar Prueba**")
+        
+        if 'test_call_sid' not in st.session_state:
+            st.session_state.test_call_sid = None
+        
+        if st.session_state.test_call_sid is None:
+            if st.button("🚀 INICIAR LLAMADA DE PRUEBA", type="primary"):
+                if len(numero_destino) > 5 and len(numero_origen) > 5:
+                    try:
+                        # Crear TwiML que conecta las dos llamadas
+                        twiml_test = f"""
+                        <?xml version="1.0" encoding="UTF-8"?>
+                        <Response>
+                            <Say language="es-MX">Conectando llamada de prueba</Say>
+                            <Dial callerId="{numero_origen}">
+                                <Number>{numero_origen}</Number>
+                            </Dial>
+                        </Response>
+                        """
+                        
+                        # Crear llamada al destino primero
+                        call = client.calls.create(
+                            twiml=twiml_test,
+                            to=numero_destino,
+                            from_=twilio_number
+                        )
+                        
+                        st.session_state.test_call_sid = call.sid
+                        st.success(f"✅ Llamada iniciada: {call.sid}")
+                        st.info(f"📞 Llamando a {numero_destino}...")
+                        add_log(f"TEST_CALL: {numero_destino} → {numero_origen}", "PRUEBA")
+                        time.sleep(2)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al iniciar llamada: {e}")
+                else:
+                    st.warning("⚠️ Ingresa números válidos con código de país (+57...)")
+        else:
+            # Monitorear llamada de prueba
+            try:
+                test_call = client.calls(st.session_state.test_call_sid).fetch()
+                st.info(f"📊 Estado: {test_call.status}")
+                
+                if test_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
+                    st.success(f"✅ Llamada finalizada: {test_call.status}")
+                    if st.button("🔄 Nueva Prueba"):
+                        st.session_state.test_call_sid = None
+                        st.rerun()
+                else:
+                    st.write("⏳ Llamada en curso...")
+                    time.sleep(3)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+                st.session_state.test_call_sid = None
+
+# --- 6. OPERACIÓN CON WEBRTC (BLOQUE EXPANDIDO Y REFORZADO) ---
+with tab_op:
+    # Componente WebRTC de Twilio Client
+    if 'webrtc_token' not in st.session_state:
+        st.session_state.webrtc_token = None
+    
+    # Mostrar componente de audio WebRTC
+    st.markdown("""<div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
+        <span id="device-status">🔴 Audio desconectado</span>
+    </div>""", unsafe_allow_html=True)
+    
+    # JavaScript para Twilio Device (WebRTC)
+    twilio_webrtc_component = f"""
+    <script src="https://sdk.twilio.com/js/client/releases/1.14.0/twilio.min.js"></script>
+    <script>
+        var device;
+        var currentConnection;
+        
+        // Función para obtener token y configurar device
+        function initTwilioDevice() {{
+            // Obtener token y configurar Twilio Device
+            fetch('https://mis-metricas-voz-5007.twil.io/token?identity={st.session_state.agente_id}')
+                .then(response => response.json())
+                .then(data => {{
+                    device = Twilio.Device.setup(data.token, {{
+                        codecPreferences: ['opus', 'pcmu'],
+                        fakeLocalDTMF: true,
+                        enableRingingState: true
+                    }});
+                    
+                    device.ready(function() {{
+                        document.getElementById('device-status').innerHTML = '🟢 Audio listo - WebRTC conectado';
+                    }});
+                    
+                    device.error(function(error) {{
+                        console.error('Error Twilio Device:', error);
+                        document.getElementById('device-status').innerHTML = '🔴 Error: ' + error.message;
+                    }});
+                    
+                    device.connect(function(conn) {{
+                        currentConnection = conn;
+                        document.getElementById('device-status').innerHTML = '📞 En llamada - ' + conn.parameters.To;
+                    }});
+                    
+                    device.disconnect(function() {{
+                        document.getElementById('device-status').innerHTML = '🟢 Audio listo - Llamada finalizada';
+                    }});
+                }});
+        }}
+        
+        // Función para iniciar llamada con WebRTC
+        function llamarWebRTC(numero) {{
+            if (device) {{
+                currentConnection = device.connect({{
+                    To: numero
+                }});
+            }} else {{
+                alert('Device no inicializado. Configura el Access Token primero.');
+            }}
+        }}
+        
+        // Función para colgar
+        function colgarWebRTC() {{
+            if (currentConnection) {{
+                currentConnection.disconnect();
+            }}
+            if (device) {{
+                device.disconnectAll();
+            }}
+        }}
+        
+        // Inicializar al cargar
+        initTwilioDevice(); // Inicializa WebRTC automáticamente
+    </script>
+    """
+    
+    import streamlit.components.v1 as components
+    components.html(twilio_webrtc_component, height=0)
+    
 with tab_op:
     if st.session_state.df_contactos is not None:
         search = st.text_input("🔍 Buscar Cliente:").lower()
@@ -232,16 +386,33 @@ with tab_op:
             with col2:
                 if not st.session_state.en_pausa:
                     if st.session_state.llamada_activa_sid is None:
-                        # Botón de llamar
-                        if st.button("📞 LLAMAR", type="primary"):
-                            try:
-                                call = client.calls.create(url=function_url, to=tel, from_=twilio_number, machine_detection='Enable')
-                                st.session_state.llamada_activa_sid = call.sid
-                                st.session_state.t_inicio_dt = datetime.now()
-                                add_log(f"CALL_START: {c['nombre']}", "TWILIO")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al iniciar llamada: {e}")
+                        # Botones de llamar (Server-Side y WebRTC)
+                        call_col1, call_col2 = st.columns(2)
+                        
+                        with call_col1:
+                            if st.button("📞 LLAMAR (Server)", type="primary"):
+                                try:
+                                    call = client.calls.create(url=function_url, to=tel, from_=twilio_number, machine_detection='Enable', record=True)
+                                    st.session_state.llamada_activa_sid = call.sid
+                                    st.session_state.t_inicio_dt = datetime.now()
+                                    add_log(f"CALL_START: {c['nombre']}", "TWILIO")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al iniciar llamada: {e}")
+                        
+                        with call_col2:
+                            st.markdown(f"""
+                            <button onclick="llamarWebRTC('{tel}')" style="
+                                background: #00A86B;
+                                color: white;
+                                border: none;
+                                padding: 10px 20px;
+                                border-radius: 5px;
+                                cursor: pointer;
+                                font-size: 16px;
+                                width: 100%;
+                            ">🎧 LLAMAR (WebRTC)</button>
+                            """, unsafe_allow_html=True)
                         
                         # Opción de reprogramar
                         st.divider()
@@ -264,6 +435,13 @@ with tab_op:
                         # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
                         try:
                             print(f"[DEBUG] Iniciando monitoreo de llamada...")
+                            
+                            # CRONÓMETRO EN TIEMPO REAL
+                            tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                            minutos = tiempo_transcurrido // 60
+                            segundos = tiempo_transcurrido % 60
+                            st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                            
                             # 1. Consultar estado real en Twilio
                             print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
                             remote = client.calls(st.session_state.llamada_activa_sid).fetch()
@@ -318,12 +496,49 @@ with tab_op:
                                         st.write("🔄 Iniciando sincronización con Google Sheets...")
                                         
                                         # Preparamos la nueva fila con SOLO las columnas del Google Sheet
-                                        # Google Sheet tiene: agente_id, nombre, telefono, estado, observacion, duracion_seg, fecha_llamada, proxima_llamada, sid_llamada
-                                        columnas_sheet = ['agente_id', 'nombre', 'telefono', 'estado', 'observacion', 'duracion_seg', 'fecha_llamada', 'proxima_llamada', 'sid_llamada']
+                                        # Google Sheet tiene: agente_id, nombre, telefono, estado, observacion, duracion_seg, fecha_llamada, proxima_llamada, sid_llamada, url_grabacion, precio_llamada, duracion_facturada, estado_respuesta, codigo_error, parent_call_sid, caller_name, forwarded_from, queue_time, annotation
+                                        columnas_sheet = ['agente_id', 'nombre', 'telefono', 'estado', 'observacion', 'duracion_seg', 'fecha_llamada', 'proxima_llamada', 'sid_llamada', 'url_grabacion', 'precio_llamada', 'duracion_facturada', 'estado_respuesta', 'codigo_error', 'parent_call_sid', 'caller_name', 'forwarded_from', 'queue_time', 'annotation']
                                         
                                         # Construir telefono completo para el Sheet (sin codigo_pais separado)
                                         if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
                                             tel = '+' + str(c['codigo_pais']).replace('+', '') + str(c['telefono'])
+                                        
+                                        # Obtener información adicional de Twilio
+                                        url_grabacion = ''
+                                        precio_llamada = ''
+                                        duracion_facturada = ''
+                                        estado_respuesta = ''
+                                        codigo_error = ''
+                                        parent_call_sid = ''
+                                        caller_name = ''
+                                        forwarded_from = ''
+                                        queue_time = ''
+                                        annotation = ''
+                                        
+                                        try:
+                                            # Obtener grabaciones de la llamada
+                                            recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
+                                            if recordings:
+                                                # URL de la grabación (formato MP3)
+                                                url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                            
+                                            # Información adicional del objeto remote que ya tenemos
+                                            precio_llamada = str(remote.price) if remote.price else '0'
+                                            duracion_facturada = str(remote.duration) if remote.duration else '0'
+                                            estado_respuesta = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
+                                            codigo_error = str(remote.error_code) if remote.error_code else ''
+                                            
+                                            # Campos adicionales de Twilio
+                                            parent_call_sid = str(remote.parent_call_sid) if remote.parent_call_sid else ''
+                                            caller_name = str(remote.caller_name) if hasattr(remote, 'caller_name') and remote.caller_name else ''
+                                            forwarded_from = str(remote.forwarded_from) if remote.forwarded_from else ''
+                                            queue_time = str(remote.queue_time) if hasattr(remote, 'queue_time') and remote.queue_time else '0'
+                                            annotation = str(remote.annotation) if hasattr(remote, 'annotation') and remote.annotation else ''
+                                            
+                                            print(f"[DEBUG] Datos Twilio - Grabación: {url_grabacion}, Precio: {precio_llamada}, Duración facturada: {duracion_facturada}")
+                                            print(f"[DEBUG] Datos adicionales - Parent SID: {parent_call_sid}, Caller Name: {caller_name}, Queue Time: {queue_time}")
+                                        except Exception as e_twilio:
+                                            print(f"[DEBUG] Error obteniendo datos adicionales de Twilio: {e_twilio}")
                                         
                                         fila_nueva = pd.DataFrame({
                                             'agente_id': [st.session_state.agente_id],
@@ -333,7 +548,18 @@ with tab_op:
                                             'observacion': [nota],
                                             'duracion_seg': [dur],
                                             'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                            'sid_llamada': [st.session_state.llamada_activa_sid]
+                                            'proxima_llamada': [''],
+                                            'sid_llamada': [st.session_state.llamada_activa_sid],
+                                            'url_grabacion': [url_grabacion],
+                                            'precio_llamada': [precio_llamada],
+                                            'duracion_facturada': [duracion_facturada],
+                                            'estado_respuesta': [estado_respuesta],
+                                            'codigo_error': [codigo_error],
+                                            'parent_call_sid': [parent_call_sid],
+                                            'caller_name': [caller_name],
+                                            'forwarded_from': [forwarded_from],
+                                            'queue_time': [queue_time],
+                                            'annotation': [annotation]
                                         })
                                         
                                         # Leemos el estado actual del sheet
