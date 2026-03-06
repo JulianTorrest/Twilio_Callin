@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 from twilio.rest import Client
 from datetime import datetime, timedelta
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import time
 import urllib.parse
 import plotly.express as px
@@ -30,24 +31,51 @@ try:
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"]
     client = Client(account_sid, auth_token)
-    conn = st.connection("gsheets", type=GSheetsConnection)
+    
+    # Conexión a Google Sheets usando gspread con Service Account
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+    gc = gspread.authorize(creds)
+    # Extraer el ID del Sheet de la URL
+    sheet_id = URL_SHEET_INFORME.split('/d/')[1].split('/')[0]
+    spreadsheet = gc.open_by_key(sheet_id)
 except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
 
-# --- 2. AUDITORIA AUTOMATICA ---
+# --- 2. FUNCIONES HELPER PARA GOOGLE SHEETS ---
+def read_sheet(worksheet_name="0"):
+    """Lee datos de Google Sheets usando gspread"""
+    try:
+        worksheet = spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else spreadsheet.worksheet(worksheet_name)
+        data = worksheet.get_all_values()
+        if len(data) > 0:
+            return pd.DataFrame(data[1:], columns=data[0])
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error leyendo sheet: {e}")
+        return pd.DataFrame()
+
+def update_sheet(df, worksheet_name="0"):
+    """Escribe datos a Google Sheets usando gspread"""
+    try:
+        worksheet = spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else spreadsheet.worksheet(worksheet_name)
+        worksheet.clear()
+        worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+        return True
+    except Exception as e:
+        print(f"Error escribiendo sheet: {e}")
+        return False
+
+# --- 3. AUDITORIA AUTOMATICA ---
 if 'logs' not in st.session_state: st.session_state.logs = []
 
 def add_log(mensaje, tipo="INFO"):
     t_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"{t_stamp} | {st.session_state.get('agente_id', 'SYS')} | {tipo} | {mensaje}"
     st.session_state.logs.append(entry)
-    if URL_SHEET_INFORME:
-        try:
-            df_logs = pd.DataFrame([l.split(" | ") for l in st.session_state.logs], columns=['Fecha', 'Agente', 'Tipo', 'Evento'])
-            conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="Auditoria_Logs", data=df_logs)
-        except Exception as e_log:
-            print(f"Error guardando log en Sheet: {e_log}")
+    # Logs se guardan solo en memoria para evitar sobrecarga en Google Sheets
+    pass
 
 # --- 3. CONTROL DE ACCESO Y ESTADO ---
 if 'agente_id' not in st.session_state:
@@ -158,8 +186,8 @@ if st.session_state.df_contactos is not None:
     st.divider()
 
 try:
-    # Leemos con bypass de cache para ver actualizaciones inmediatas
-    df_historico = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
+    # Leemos con gspread
+    df_historico = read_sheet("0")
 except:
     df_historico = pd.DataFrame()
 
@@ -587,7 +615,7 @@ with tab_op:
                                         
                                         # Leemos el estado actual del sheet
                                         try:
-                                            df_gsheet_actual = conn.read(spreadsheet=URL_SHEET_INFORME, worksheet="0", ttl=0)
+                                            df_gsheet_actual = read_sheet("0")
                                             st.write(f"📊 Registros existentes en Sheet: {len(df_gsheet_actual)}")
                                         except Exception as e_read:
                                             st.write(f"⚠️ Sheet vacío o error al leer (normal si es primera vez): {e_read}")
@@ -616,9 +644,11 @@ with tab_op:
                                         
                                         # Subimos al Sheet - CRÍTICO: especificar worksheet="0"
                                         st.write(f"💾 Guardando {len(df_actualizado)} registros en Google Sheets...")
-                                        print(f"[DEBUG] Intentando conn.update con {len(df_actualizado)} registros")
-                                        conn.update(spreadsheet=URL_SHEET_INFORME, worksheet="0", data=df_actualizado)
-                                        print(f"[DEBUG] conn.update exitoso")
+                                        print(f"[DEBUG] Intentando update_sheet con {len(df_actualizado)} registros")
+                                        if update_sheet(df_actualizado, "0"):
+                                            print(f"[DEBUG] update_sheet exitoso")
+                                        else:
+                                            raise Exception("Error en update_sheet")
                                         
                                         add_log(f"SYNC_EXITOSA: {c['nombre']} como {final_status}", "DATA")
                                         st.success(f"✅ Guardado exitoso en Google Sheets: {final_status}")
