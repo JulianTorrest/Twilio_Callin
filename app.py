@@ -633,21 +633,20 @@ with tab_op:
                                         # Paso 1: Llamar al agente primero
                                         print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
                                  
-                                        # Crear TwiML para la conferencia
-                                        twiml_conference = f"""
-                                        <?xml version="1.0" encoding="UTF-8"?>
+                                        # Crear TwiML para la conferencia (SIN mensajes de voz)
+                                        twiml_conference = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Say language="es-MX">Conectando con el cliente</Say>
                                             <Dial>
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
                                                     record="record-from-start"
                                                     recordingStatusCallback="{function_url}/recording-status"
+                                                    waitUrl=""
+                                                    beep="false"
                                                 >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
                                             </Dial>
-                                        </Response>
-                                        """
+                                        </Response>"""
                                         
                                         # Llamar al agente
                                         call_agente = client.calls.create(
@@ -661,13 +660,13 @@ with tab_op:
                                         # Esperar 2 segundos para que el agente conteste
                                         time.sleep(2)
                                         
-                                        # Paso 2: Llamar al cliente con el número del agente como Caller ID
-                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
+                                        # Paso 2: Llamar al cliente usando número de Twilio (no requiere verificación)
+                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {twilio_number}")
                                         
                                         call_cliente = client.calls.create(
                                             twiml=twiml_conference,
                                             to=tel,
-                                            from_=st.session_state.numero_celular_agente,  # Caller ID = número del agente
+                                            from_=twilio_number,  # Usar número de Twilio (evita verificación)
                                             machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
@@ -880,11 +879,22 @@ with tab_op:
                                                     'codigo_error': [codigo_error]
                                                 })
                                                 
-                                                # Leer Sheet Informe actual
+                                                # Leer Sheet Informe actual (con caché para evitar rate limit)
                                                 try:
-                                                    df_informe_actual = read_sheet("0")
+                                                    # Usar caché de session_state para evitar múltiples lecturas
+                                                    if 'df_informe_cache' not in st.session_state or st.session_state.get('informe_cache_time', 0) < time.time() - 30:
+                                                        # Actualizar caché cada 30 segundos
+                                                        df_informe_actual = read_sheet("0")
+                                                        st.session_state.df_informe_cache = df_informe_actual
+                                                        st.session_state.informe_cache_time = time.time()
+                                                        print(f"[DEBUG] Caché de Informe actualizado: {len(df_informe_actual)} registros")
+                                                    else:
+                                                        df_informe_actual = st.session_state.df_informe_cache
+                                                        print(f"[DEBUG] Usando caché de Informe: {len(df_informe_actual)} registros")
+                                                    
                                                     st.write(f"📊 Registros en Informe: {len(df_informe_actual)}")
-                                                except:
+                                                except Exception as e_read:
+                                                    print(f"[ERROR] Error leyendo Informe: {e_read}")
                                                     df_informe_actual = pd.DataFrame()
                                                 
                                                 # Agregar nuevo registro
