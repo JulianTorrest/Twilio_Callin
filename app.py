@@ -32,6 +32,10 @@ try:
     URL_SHEET_CONTACTOS = st.secrets.get("GSHEET_CONTACTOS_URL")
     GDRIVE_LOGS_FOLDER_ID = st.secrets.get("GDRIVE_LOGS_FOLDER_ID")
     CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"]
+    
+    # Mapeo de números celulares de agentes para Hybrid Click-to-Call
+    NUMEROS_CELULAR_AGENTES = dict(st.secrets.get("numeros_celular_agentes", {}))
+    
     client = Client(account_sid, auth_token)
     
     # Conexión a Google Sheets usando gspread con Service Account
@@ -187,8 +191,17 @@ if 'agente_id' not in st.session_state:
         ced = st.text_input("Cédula:", type="password").strip()
         if st.form_submit_button("Entrar"):
             if ced in CEDULAS_AUTORIZADAS:
+                # Obtener número celular del agente desde secrets
+                numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
+                
+                if not numero_celular:
+                    st.error(f"⚠️ No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
+                    st.stop()
+                
                 st.session_state.agente_id = ced
-                add_log("LOGIN_EXITOSO", "AUTH")
+                st.session_state.numero_celular_agente = numero_celular
+                add_log(f"LOGIN_EXITOSO - Número: {numero_celular}", "AUTH")
+                
                 # Cargar contactos automáticamente al iniciar sesión
                 with st.spinner("Cargando tus contactos asignados..."):
                     st.session_state.df_contactos = cargar_contactos_agente(ced)
@@ -208,10 +221,13 @@ if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa
 if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
 if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
+if 'numero_celular_agente' not in st.session_state: st.session_state.numero_celular_agente = None
 
 # --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
+    if st.session_state.numero_celular_agente:
+        st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
     
     if not st.session_state.en_pausa:
         if st.button("☕ Iniciar Pausa"):
@@ -582,30 +598,68 @@ with tab_op:
                         # Botones de llamar (Server-Side y WebRTC)
                         call_col1, call_col2 = st.columns(2)
                         
-                        with call_col1:
-                            if st.button("📞 LLAMAR (Server)", type="primary"):
-                                try:
-                                    call = client.calls.create(url=function_url, to=tel, from_=twilio_number, machine_detection='Enable', record=True)
-                                    st.session_state.llamada_activa_sid = call.sid
-                                    st.session_state.t_inicio_dt = datetime.now()
-                                    add_log(f"CALL_START: {c['nombre']}", "TWILIO")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error al iniciar llamada: {e}")
-                        
-                        with call_col2:
-                            st.markdown(f"""
-                            <button onclick="llamarWebRTC('{tel}')" style="
-                                background: #00A86B;
-                                color: white;
-                                border: none;
-                                padding: 10px 20px;
-                                border-radius: 5px;
-                                cursor: pointer;
-                                font-size: 16px;
-                                width: 100%;
-                            ">🎧 LLAMAR (WebRTC)</button>
-                            """, unsafe_allow_html=True)
+                        # Botón único de llamada con Conference Call
+                        if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True):
+                            try:
+                                # Crear conference call: Twilio llama primero al agente, luego al cliente
+                                # El cliente verá el número del agente como Caller ID
+                                
+                                # Paso 1: Llamar al agente primero
+                                print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
+                                
+                                # Crear TwiML para la conferencia
+                                twiml_conference = f"""
+                                <?xml version="1.0" encoding="UTF-8"?>
+                                <Response>
+                                    <Say language="es-MX">Conectando con el cliente</Say>
+                                    <Dial>
+                                        <Conference 
+                                            startConferenceOnEnter="true"
+                                            endConferenceOnExit="true"
+                                            record="record-from-start"
+                                            recordingStatusCallback="{function_url}/recording-status"
+                                        >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
+                                    </Dial>
+                                </Response>
+                                """
+                                
+                                # Llamar al agente
+                                call_agente = client.calls.create(
+                                    twiml=twiml_conference,
+                                    to=st.session_state.numero_celular_agente,
+                                    from_=twilio_number,
+                                    status_callback=f"{function_url}/status",
+                                    status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                )
+                                
+                                # Esperar 2 segundos para que el agente conteste
+                                time.sleep(2)
+                                
+                                # Paso 2: Llamar al cliente con el número del agente como Caller ID
+                                print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
+                                
+                                call_cliente = client.calls.create(
+                                    twiml=twiml_conference,
+                                    to=tel,
+                                    from_=st.session_state.numero_celular_agente,  # Caller ID = número del agente
+                                    machine_detection='Enable',
+                                    status_callback=f"{function_url}/status",
+                                    status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                )
+                                
+                                # Guardar el SID de la llamada del cliente (para tracking)
+                                st.session_state.llamada_activa_sid = call_cliente.sid
+                                st.session_state.t_inicio_dt = datetime.now()
+                                
+                                add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
+                                st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al iniciar llamada: {e}")
+                                print(f"[ERROR] Error en conference call: {e}")
+                                import traceback
+                                print(traceback.format_exc())
                         
                         # Opción de reprogramar
                         st.divider()
