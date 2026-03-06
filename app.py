@@ -81,17 +81,31 @@ def cargar_contactos_agente(cedula_agente):
         worksheet = spreadsheet_contactos.get_worksheet(0)
         data = worksheet.get_all_values()
         
-        if len(data) <= 1:
-            print(f"[DEBUG] Sheet de contactos vacío")
-            return pd.DataFrame()
+        # Crear DataFrame vacío con columnas necesarias
+        columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
+                              'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
         
-        # Crear DataFrame
+        if len(data) <= 1:
+            print(f"[DEBUG] Sheet de contactos vacío o solo tiene encabezados")
+            # Retornar DataFrame vacío pero con las columnas necesarias
+            return pd.DataFrame(columns=columnas_requeridas)
+        
+        # Crear DataFrame con los datos del sheet
         df_todos = pd.DataFrame(data[1:], columns=data[0])
         print(f"[DEBUG] Total contactos en sheet: {len(df_todos)}")
+        
+        # Verificar que existe la columna cedula_agente
+        if 'cedula_agente' not in df_todos.columns:
+            print(f"[ERROR] El sheet no tiene la columna 'cedula_agente'")
+            return pd.DataFrame(columns=columnas_requeridas)
         
         # Filtrar por cedula_agente
         df_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(cedula_agente)].copy()
         print(f"[DEBUG] Contactos para agente {cedula_agente}: {len(df_agente)}")
+        
+        if df_agente.empty:
+            print(f"[DEBUG] No hay contactos asignados al agente {cedula_agente}")
+            return pd.DataFrame(columns=columnas_requeridas)
         
         # Agregar columnas necesarias para el sistema
         for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
@@ -104,7 +118,12 @@ def cargar_contactos_agente(cedula_agente):
         return df_agente
     except Exception as e:
         print(f"[ERROR] Error cargando contactos: {e}")
-        return pd.DataFrame()
+        import traceback
+        print(traceback.format_exc())
+        # Retornar DataFrame vacío con columnas en caso de error
+        columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
+                              'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
+        return pd.DataFrame(columns=columnas_requeridas)
 
 def guardar_logs_en_drive():
     """Guarda los logs en un archivo de texto en Google Drive"""
@@ -218,7 +237,7 @@ with st.sidebar:
             time.sleep(1)
             st.rerun()
 
-    if st.session_state.df_contactos is not None:
+    if st.session_state.df_contactos is not None and not st.session_state.df_contactos.empty and 'estado' in st.session_state.df_contactos.columns:
         df_pend = st.session_state.df_contactos[st.session_state.df_contactos['estado'].isin(['Pendiente', 'No Contesto'])]
         st.download_button("📥 Descargar Pendientes", df_pend.to_csv(index=False).encode('utf-8-sig'), "pendientes.csv")
 
