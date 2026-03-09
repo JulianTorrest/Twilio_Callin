@@ -631,6 +631,9 @@ with tab_op:
         st.error(f"Error cargando SDK de Twilio: {e}")
         twilio_sdk_content = "console.error('No se pudo cargar el SDK de Twilio');"
     
+    # Determinar si hay una llamada WebRTC pendiente
+    numero_a_llamar = st.session_state.webrtc_numero if st.session_state.webrtc_activo else ''
+    
     twilio_webrtc_component = f"""
     <div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
         <span id="device-status">🔴 Inicializando audio...</span>
@@ -643,6 +646,7 @@ with tab_op:
     <script>
         var device;
         var currentConnection;
+        var numeroLlamar = '{numero_a_llamar}';
         
         // Función para actualizar estado
         window.updateStatus = function(message) {{
@@ -658,13 +662,6 @@ with tab_op:
             var statusEl = document.getElementById('device-status');
             if (!statusEl) {{
                 console.error('Elemento device-status no encontrado');
-                setTimeout(initTwilioDevice, 200);
-                return;
-            }}
-            
-            // Verificar que Twilio esté disponible
-            if (typeof Twilio === 'undefined') {{
-                console.log('⏳ Esperando a que Twilio se cargue...');
                 setTimeout(initTwilioDevice, 200);
                 return;
             }}
@@ -700,6 +697,14 @@ with tab_op:
                 device.on('registered', function() {{
                     console.log('✅ Twilio Device registrado');
                     updateStatus('🟢 Audio listo - WebRTC conectado');
+                    
+                    // Si hay un número pendiente, llamar automáticamente
+                    if (numeroLlamar && numeroLlamar !== '') {{
+                        console.log('🚀 Ejecutando llamada automática a:', numeroLlamar);
+                        setTimeout(function() {{
+                            llamarWebRTC(numeroLlamar);
+                        }}, 500);
+                    }}
                 }});
                 
                 device.on('error', function(error) {{
@@ -723,8 +728,8 @@ with tab_op:
             }}
         }}
         
-        // Función para hacer llamadas WebRTC - EXPUESTA GLOBALMENTE
-        window.llamarWebRTC = function(numero) {{
+        // Función para hacer llamadas WebRTC
+        function llamarWebRTC(numero) {{
             if (!device) {{
                 alert('⚠️ WebRTC no está inicializado. Espera a que aparezca "Audio listo"');
                 return;
@@ -758,6 +763,8 @@ with tab_op:
                 alert('❌ Error: ' + error.message);
             }}
         }};
+        
+        window.llamarWebRTC = llamarWebRTC;
         
         window.colgarWebRTC = function() {{
             if (currentConnection) {{
@@ -950,20 +957,6 @@ with tab_op:
                                     add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
                                     st.rerun()
                                 
-                                # Si WebRTC está activo para este contacto, ejecutar JavaScript automáticamente
-                                if st.session_state.webrtc_activo and st.session_state.webrtc_numero == tel:
-                                    components.html(f"""
-                                    <script>
-                                        // Ejecutar llamada WebRTC automáticamente
-                                        if (top.llamarWebRTC) {{
-                                            top.llamarWebRTC('{tel}');
-                                        }} else {{
-                                            console.error('llamarWebRTC no está disponible en top');
-                                        }}
-                                    </script>
-                                    """, height=0)
-                                # ============================================================
-                                
                                 # Opción de reprogramar
                                 st.divider()
                                 st.write("**📅 Reprogramar Llamada**")
@@ -1079,25 +1072,10 @@ with tab_op:
                                         time.sleep(1)
                                         st.rerun()
                                     
-                                    # Botón HTML para colgar desde JavaScript
-                                    st.markdown("""
-                                    <button onclick="colgarWebRTC()" style="
-                                        background: #FF4444;
-                                        color: white;
-                                        border: none;
-                                        padding: 10px 20px;
-                                        border-radius: 5px;
-                                        cursor: pointer;
-                                        font-size: 16px;
-                                        width: 100%;
-                                        margin-top: 10px;
-                                    ">📞 Colgar Audio</button>
-                                    """, unsafe_allow_html=True)
-                                    
                                     # Auto-refresh para actualizar cronómetro
                                     time.sleep(1)
                                     st.rerun()
-                                
+
                                 # Monitor para Conference Call
                                 try:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
