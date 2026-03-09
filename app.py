@@ -1269,9 +1269,24 @@ with tab_op:
                                         # Calcular duración hasta el momento
                                         dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                         
-                                        # Pausar la grabación en Twilio si tenemos el SID
+                                        print(f"[DEBUG] Intentando pausar grabación WebRTC para call_sid: {st.session_state.webrtc_call_sid}")
+                                        print(f"[DEBUG] ⚠️ WebRTC no permite pausar grabación DURANTE la llamada")
+                                        print(f"[DEBUG] La grabación se crea después de finalizar la llamada")
+                                        
+                                        # Explicar al usuario la limitación de WebRTC
+                                        st.error("⚠️ **WebRTC no permite pausar grabación durante la llamada**")
+                                        st.info("📝 **La grabación se guardará automáticamente cuando finalices la llamada**")
+                                        
+                                        # Opción: Finalizar llamada ahora para guardar grabación parcial
+                                        if st.button("📞 Finalizar llamada ahora", key=f"finish_for_recording_{idx}"):
+                                            print(f"[DEBUG] Finalizando llamada para guardar grabación parcial...")
+                                            finalizar_webrtc = True
+                                            st.success("📞 Finalizando llamada para guardar grabación...")
+                                            st.rerun()
+                                        
+                                        # Opción: Pausar la grabación en Twilio si tenemos el SID
                                         if st.session_state.webrtc_call_sid:
-                                            print(f"[DEBUG] Intentando pausar grabación WebRTC para call_sid: {st.session_state.webrtc_call_sid}")
+                                            print(f"[DEBUG] Intentando pausar grabación {st.session_state.webrtc_call_sid}...")
                                             try:
                                                 # Primero verificar si existe la grabación
                                                 recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
@@ -1394,25 +1409,13 @@ with tab_op:
                                                             print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
                                                             st.success(f"🎙️ Grabación disponible")
                                                             
-                                                            # Intentar solicitar transcripción manualmente (método compatible con PCI Mode)
-                                                            st.write("📝 Intentando transcripción manual...")
-                                                            print(f"[DEBUG] 🎤 Intentando transcripción manual para {recording_sid}")
+                                                            # PCI Mode no permite transcripciones automáticas - Grabación solamente
+                                                            st.info("📝 PCI Mode - Solo grabación disponible")
+                                                            print(f"[DEBUG] 🎤 PCI Mode detectado - Transcripción no disponible")
+                                                            print(f"[DEBUG] 📼 Grabación guardada: {recording_sid}")
                                                             
-                                                            try:
-                                                                # Método alternativo para PCI Mode: usar API directamente
-                                                                transcription_sid = solicitar_transcripcion(recording_sid)
-                                                                if transcription_sid:
-                                                                    st.success(f"✅ Transcripción solicitada: {transcription_sid[:8]}...")
-                                                                    print(f"[DEBUG] ✅ Transcripción solicitada manualmente: {transcription_sid}")
-                                                                else:
-                                                                    st.info("📝 Transcripción no disponible - Se intentará más tarde")
-                                                                    print(f"[DEBUG] 📝 Transcripción manual falló - se procesará en background")
-                                                            except Exception as e_trans:
-                                                                print(f"[DEBUG] Error transcripción manual: {e_trans}")
-                                                                st.info("📝 Transcripción se procesará en background")
-                                                            
-                                                            # Pequeña espera para que la transcripción se procese
-                                                            time.sleep(1)
+                                                            # No intentar transcripción en PCI Mode para evitar errores
+                                                            transcription_sid = None
                                                             
                                                             break
                                                         else:
@@ -1784,6 +1787,20 @@ with tab_op:
                                                 estado_respuesta = answered_by
                                                 codigo_error = ''
                                                 
+                                                # Variables adicionales de Twilio para consistencia con WebRTC
+                                                account_sid = ''
+                                                start_time = ''
+                                                end_time = ''
+                                                from_number = ''
+                                                to_number = ''
+                                                direction = ''
+                                                status = ''
+                                                price_unit = 'USD'
+                                                call_type = ''
+                                                date_created = ''
+                                                parent_call_sid = ''
+                                                phone_number_sid = ''
+                                                
                                                 transcription_sid = None
                                                 
                                                 try:
@@ -1800,15 +1817,37 @@ with tab_op:
                                                         else:
                                                             st.warning("⚠️ No se pudo solicitar transcripción")
                                                     
-                                                    precio_llamada = str(remote.price) if remote.price else '0'
-                                                    duracion_facturada = str(remote.duration) if remote.duration else '0'
-                                                    codigo_error = str(remote.error_code) if remote.error_code else ''
+                                                    # Obtener TODOS los datos de la llamada de Twilio (como WebRTC)
+                                                    if st.session_state.llamada_activa_sid:
+                                                        call_data = client.calls(st.session_state.llamada_activa_sid).fetch()
+                                                        
+                                                        # Datos básicos
+                                                        precio_llamada = str(call_data.price) if call_data.price else '0'
+                                                        duracion_facturada = str(call_data.duration) if call_data.duration else '0'
+                                                        codigo_error = str(call_data.error_code) if hasattr(call_data, 'error_code') and call_data.error_code else ''
+                                                        
+                                                        # Datos adicionales completos de Twilio
+                                                        account_sid = str(call_data.account_sid) if hasattr(call_data, 'account_sid') else ''
+                                                        start_time = str(call_data.start_time) if hasattr(call_data, 'start_time') and call_data.start_time else ''
+                                                        end_time = str(call_data.end_time) if hasattr(call_data, 'end_time') and call_data.end_time else ''
+                                                        from_number = str(call_data.from_) if hasattr(call_data, 'from_') else ''
+                                                        to_number = str(call_data.to) if hasattr(call_data, 'to') else tel
+                                                        direction = str(call_data.direction) if hasattr(call_data, 'direction') else ''
+                                                        status = str(call_data.status) if hasattr(call_data, 'status') else ''
+                                                        price_unit = str(call_data.price_unit) if hasattr(call_data, 'price_unit') else 'USD'
+                                                        call_type = 'client' if from_number.startswith('client:') else 'phone'
+                                                        date_created = str(call_data.date_created) if hasattr(call_data, 'date_created') and call_data.date_created else ''
+                                                        parent_call_sid = str(call_data.parent_call_sid) if hasattr(call_data, 'parent_call_sid') and call_data.parent_call_sid else ''
+                                                        phone_number_sid = str(call_data.phone_number_sid) if hasattr(call_data, 'phone_number_sid') and call_data.phone_number_sid else ''
+                                                        
+                                                        print(f"[DEBUG] Conference - Datos completos obtenidos: duration={duracion_facturada}s, from={from_number}, to={to_number}")
+                                                        
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
-                                                
 
-                                                # Preparar fila para Sheet Informe
+                                                # Preparar fila para Sheet Informe con TODAS las columnas de Twilio (como WebRTC)
                                                 fila_informe = pd.DataFrame({
+                                                    # Columnas del sistema
                                                     'agente_id': [st.session_state.agente_id],
                                                     'nombre': [c['nombre']],
                                                     'telefono': [tel],
@@ -1816,12 +1855,26 @@ with tab_op:
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                                    'sid_llamada': [st.session_state.llamada_activa_sid],
+                                                    
+                                                    # Columnas de Twilio Call Recording (completas como WebRTC)
+                                                    'call_sid': [st.session_state.llamada_activa_sid or ''],
+                                                    'account_sid': [account_sid],
+                                                    'start_time': [start_time],
+                                                    'end_time': [end_time],
+                                                    'duration': [duracion_facturada],
+                                                    'from': [from_number],
+                                                    'to': [to_number],
+                                                    'direction': [direction],
+                                                    'status': [status],
+                                                    'price': [precio_llamada],
+                                                    'price_unit': [price_unit],
+                                                    'answered_by': [estado_respuesta],
+                                                    'type': [call_type],
+                                                    'date_created': [date_created],
+                                                    'parent_call_sid': [parent_call_sid],
+                                                    'phone_number_sid': [phone_number_sid],
+                                                    'error_code': [codigo_error],
                                                     'url_grabacion': [url_grabacion],
-                                                    'precio_llamada': [precio_llamada],
-                                                    'duracion_facturada': [duracion_facturada],
-                                                    'estado_respuesta': [estado_respuesta],
-                                                    'codigo_error': [codigo_error],
                                                     'transcription_sid': [transcription_sid if transcription_sid else ''],
                                                     'grabacion_pendiente': ['SI' if not url_grabacion else 'NO']
                                                 })
