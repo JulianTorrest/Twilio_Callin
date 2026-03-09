@@ -723,8 +723,8 @@ with tab_op:
             }}
         }}
         
-        // Función para hacer llamadas WebRTC
-        function llamarWebRTC(numero) {{
+        // Función para hacer llamadas WebRTC - EXPUESTA GLOBALMENTE
+        window.llamarWebRTC = function(numero) {{
             if (!device) {{
                 alert('⚠️ WebRTC no está inicializado. Espera a que aparezca "Audio listo"');
                 return;
@@ -757,13 +757,13 @@ with tab_op:
                 console.error('Error iniciando llamada:', error);
                 alert('❌ Error: ' + error.message);
             }}
-        }}
+        }};
         
-        function colgarWebRTC() {{
+        window.colgarWebRTC = function() {{
             if (currentConnection) {{
                 currentConnection.disconnect();
             }}
-        }}
+        }};
         
         // Inicializar Twilio Device cuando el DOM esté listo
         setTimeout(initTwilioDevice, 100);
@@ -941,8 +941,8 @@ with tab_op:
                                 #         st.error(f"Error al iniciar llamada: {e}")
                                 
                                 # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
-                                st.markdown(f"""
-                                <button onclick="llamarWebRTC('{tel}')" style="
+                                components.html(f"""
+                                <button onclick="parent.window.llamarWebRTC('{tel}')" style="
                                     background: #28a745;
                                     color: white;
                                     border: none;
@@ -957,7 +957,7 @@ with tab_op:
                                 " onmouseover="this.style.background='#218838'" onmouseout="this.style.background='#28a745'">
                                 🎧 LLAMAR (WebRTC)
                                 </button>
-                                """, unsafe_allow_html=True)
+                                """, height=50)
                                 # ============================================================
                                 
                                 # Opción de reprogramar
