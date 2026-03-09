@@ -193,7 +193,7 @@ def cargar_contactos_agente(cedula_agente):
         worksheet = spreadsheet_contactos.get_worksheet(0)
         data = worksheet.get_all_values()
         
-        # Crear DataFrame vacío con columnas necesarias
+        # Definir columnas requeridas en el orden correcto
         columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
                               'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
         
@@ -205,11 +205,46 @@ def cargar_contactos_agente(cedula_agente):
         # Crear DataFrame con los datos del sheet
         df_todos = pd.DataFrame(data[1:], columns=data[0])
         print(f"[DEBUG] Total contactos en sheet: {len(df_todos)}")
+        print(f"[DEBUG] Columnas actuales en Sheet: {list(df_todos.columns)}")
         
         # Verificar que existe la columna cedula_agente
         if 'cedula_agente' not in df_todos.columns:
             print(f"[ERROR] El sheet no tiene la columna 'cedula_agente'")
             return pd.DataFrame(columns=columnas_requeridas)
+        
+        # Agregar columnas faltantes a TODO el DataFrame (antes de filtrar)
+        columnas_faltantes = []
+        for col in columnas_requeridas:
+            if col not in df_todos.columns:
+                df_todos[col] = ''
+                columnas_faltantes.append(col)
+        
+        if columnas_faltantes:
+            print(f"[DEBUG] ⚠️ Columnas agregadas al DataFrame: {columnas_faltantes}")
+            print(f"[DEBUG] 💡 Estas columnas se agregarán al Sheet cuando se guarde la primera gestión")
+        
+        # Reordenar columnas para que coincidan con el orden requerido
+        df_todos = df_todos[columnas_requeridas]
+        
+        # RELLENO AUTOMÁTICO INTELIGENTE DE ESTADO
+        # Solo rellenar 'Pendiente' si la fila tiene datos válidos (nombre, telefono, cedula_agente)
+        # Esto evita rellenar filas vacías infinitas y problemas de quota
+        filas_con_datos = (
+            (df_todos['nombre'].astype(str).str.strip() != '') & 
+            (df_todos['telefono'].astype(str).str.strip() != '') & 
+            (df_todos['cedula_agente'].astype(str).str.strip() != '')
+        )
+        
+        # Contar cuántas filas tienen estado vacío pero datos válidos
+        estado_vacio = df_todos['estado'].fillna('').astype(str).str.strip() == ''
+        filas_a_rellenar = filas_con_datos & estado_vacio
+        num_filas_rellenadas = filas_a_rellenar.sum()
+        
+        if num_filas_rellenadas > 0:
+            # Rellenar solo las filas que tienen datos válidos
+            df_todos.loc[filas_a_rellenar, 'estado'] = 'Pendiente'
+            print(f"[DEBUG] 🔄 Auto-rellenado: {num_filas_rellenadas} filas con estado vacío → 'Pendiente'")
+            print(f"[DEBUG] ⚠️ IMPORTANTE: Estas filas se guardarán en el Sheet en la próxima actualización")
         
         # Filtrar por cedula_agente
         df_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(cedula_agente)].copy()
@@ -219,17 +254,10 @@ def cargar_contactos_agente(cedula_agente):
             print(f"[DEBUG] No hay contactos asignados al agente {cedula_agente}")
             return pd.DataFrame(columns=columnas_requeridas)
         
-        # Agregar columnas necesarias para el sistema si no existen
-        for col in ['estado', 'observacion', 'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']:
-            if col not in df_agente.columns:
-                df_agente[col] = ''
+        # Asignar agente_id si está vacío (solo para contactos del agente)
+        df_agente['agente_id'] = df_agente['agente_id'].fillna('').replace('', cedula_agente)
         
-        # Si el campo estado está vacío, asignar 'Pendiente' para el filtro de la UI
-        # Esto permite que contactos sin gestionar aparezcan en "Pendientes"
-        df_agente['estado'] = df_agente['estado'].fillna('').replace('', 'Pendiente')
-        
-        # Asignar agente_id
-        df_agente['agente_id'] = cedula_agente
+        print(f"[DEBUG] ✅ DataFrame cargado con {len(df_agente)} contactos y {len(df_agente.columns)} columnas")
         
         return df_agente
     except Exception as e:
