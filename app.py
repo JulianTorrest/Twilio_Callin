@@ -626,10 +626,57 @@ with tab_op:
         <span id="device-status">🔴 Inicializando audio...</span>
     </div>
     
-    <script src="https://sdk.twilio.com/js/client/v2.11/twilio.min.js" onload="console.log('Twilio SDK cargado'); setTimeout(initTwilioDevice, 100);" onerror="console.error('Error cargando Twilio SDK');"></script>
+    <script>
+    // Cargar SDK con manejo de errores mejorado
+    function loadTwilioSDK() {{
+        console.log('Iniciando carga de Twilio SDK...');
+        
+        const script = document.createElement('script');
+        script.src = 'https://sdk.twilio.com/js/client/v2.11/twilio.min.js';
+        script.onload = function() {{
+            console.log('✅ Twilio SDK cargado exitosamente');
+            setTimeout(initTwilioDevice, 100);
+        }};
+        script.onerror = function() {{
+            console.error('❌ Error cargando Twilio SDK - URL principal');
+            // Intentar URL alternativa
+            loadAlternativeSDK();
+        }};
+        document.head.appendChild(script);
+    }}
+    
+    function loadAlternativeSDK() {{
+        console.log('Intentando URL alternativa del SDK...');
+        const script = document.createElement('script');
+        script.src = 'https://media.twiliocdn.com/sdk/js/client/v2.11/twilio.min.js';
+        script.onload = function() {{
+            console.log('✅ Twilio SDK (alternativo) cargado exitosamente');
+            setTimeout(initTwilioDevice, 100);
+        }};
+        script.onerror = function() {{
+            console.error('❌ Error cargando SDK alternativo');
+            if (typeof window.updateStatus === 'function') {{
+                window.updateStatus('🔴 Error: No se pudo cargar el SDK de Twilio. Verifica tu conexión.');
+            }}
+        }};
+        document.head.appendChild(script);
+    }}
+    
+    // Iniciar carga del SDK
+    loadTwilioSDK();
+</script>
     <script>
         var device;
         var currentConnection;
+        
+        // Función para actualizar estado
+        window.updateStatus = function(message) {{
+            var statusEl = document.getElementById('device-status');
+            if (statusEl) {{
+                statusEl.innerHTML = message;
+                console.log('Status:', message);
+            }}
+        }};
         
         // Función para obtener token y configurar device
         async function initTwilioDevice() {{
@@ -642,52 +689,62 @@ with tab_op:
             
             // Verificar que Twilio esté disponible
             if (typeof Twilio === 'undefined') {{
-                console.log('Esperando a que Twilio se cargue...');
+                console.log('⏳ Esperando a que Twilio se cargue...');
                 setTimeout(initTwilioDevice, 200);
                 return;
             }}
             
             try {{
-                statusEl.innerHTML = '🟡 Conectando con Twilio...';
+                updateStatus('🟡 Conectando con Twilio...');
                 
                 // Obtener token
                 const tokenUrl = `{function_url}/token?identity={st.session_state.agente_id}`;
                 console.log('🔍 URL del token:', tokenUrl);
+                
                 const response = await fetch(tokenUrl);
-                if (!response.ok) throw new Error('Error obteniendo token');
+                console.log('📡 Respuesta del token:', response.status);
+                
+                if (!response.ok) {{
+                    const errorText = await response.text();
+                    console.error('❌ Error en respuesta:', errorText);
+                    throw new Error(`Error ${{response.status}}: ${{errorText}}`);
+                }}
                 
                 const data = await response.json();
-                console.log('Token obtenido exitosamente');
+                console.log('✅ Token obtenido exitosamente');
                 
                 // Crear Device con SDK v2.x
+                updateStatus('🟡 Configurando dispositivo...');
                 device = new Twilio.Device(data.token, {{
                     codecPreferences: [Twilio.Device.CodecName.Opus, Twilio.Device.CodecName.PCMU],
                     logLevel: 1,
                     edge: 'ashburn'
                 }});
                 
-                // Registrar Device
-                await device.register();
-                
                 // Event listeners
                 device.on('registered', function() {{
-                    console.log('Twilio Device registrado y listo');
-                    if (statusEl) statusEl.innerHTML = '🟢 Audio listo - WebRTC conectado';
+                    console.log('✅ Twilio Device registrado y listo');
+                    updateStatus('🟢 Audio listo - WebRTC conectado');
                 }});
                 
                 device.on('error', function(error) {{
-                    console.error('Error Twilio Device:', error);
-                    if (statusEl) statusEl.innerHTML = '🔴 Error: ' + (error.message || 'Error desconocido');
+                    console.error('❌ Error Twilio Device:', error);
+                    updateStatus('🔴 Error: ' + (error.message || 'Error desconocido'));
                 }});
                 
                 device.on('incoming', function(call) {{
-                    console.log('Llamada entrante');
+                    console.log('📞 Llamada entrante');
                     call.accept();
                 }});
                 
+                // Registrar Device
+                updateStatus('🟡 Registrando dispositivo...');
+                await device.register();
+                console.log('✅ Dispositivo registrado');
+                
             }} catch(error) {{
-                console.error('Error inicializando Twilio:', error);
-                if (statusEl) statusEl.innerHTML = '🔴 Error: ' + error.message;
+                console.error('❌ Error inicializando Twilio:', error);
+                updateStatus('🔴 Error: ' + error.message);
             }}
         }}
         
