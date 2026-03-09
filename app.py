@@ -1252,28 +1252,49 @@ with tab_op:
                                         # Si la llamada terminó remotamente, marcar para finalizar automáticamente
                                         finalizar_webrtc = True
                                     
-                                    # Manejar pausa de grabación en WebRTC
                                     if pausar_webrtc:
                                         # Calcular duración hasta el momento
                                         dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                         
                                         # Pausar la grabación en Twilio si tenemos el SID
                                         if st.session_state.webrtc_call_sid:
+                                            print(f"[DEBUG] Intentando pausar grabación WebRTC para call_sid: {st.session_state.webrtc_call_sid}")
                                             try:
+                                                # Primero verificar si existe la grabación
                                                 recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
+                                                print(f"[DEBUG] Grabaciones encontradas: {len(recordings)}")
+                                                
                                                 if recordings:
-                                                    client.recordings(recordings[0].sid).update(status='paused')
+                                                    recording = recordings[0]
+                                                    print(f"[DEBUG] Grabación SID: {recording.sid}")
+                                                    print(f"[DEBUG] Grabación Status: {recording.status}")
+                                                    print(f"[DEBUG] Grabación Duration: {recording.duration}")
+                                                    
+                                                    # Intentar pausar
+                                                    print(f"[DEBUG] Intentando pausar grabación {recording.sid}...")
+                                                    client.recordings(recording.sid).update(status='paused')
+                                                    print(f"[DEBUG] ✅ Grabación pausada exitosamente")
                                                     st.success("⏸️ Grabación pausada en Twilio")
+                                                else:
+                                                    print(f"[DEBUG] ⚠️ No se encontraron grabaciones activas para {st.session_state.webrtc_call_sid}")
+                                                    st.warning("⚠️ No hay grabación activa para pausar")
+                                                    
+                                                # Guardar en Sheet Informe con estado "Grabación Pausada"
+                                                if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.webrtc_call_sid or ''):
+                                                    st.session_state.grabacion_pausada = True
+                                                    add_log(f"WEBRTC_GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
+                                                    st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                                else:
+                                                    st.error("❌ Error guardando en Sheet Informe")
+                                                    
                                             except Exception as e:
                                                 print(f"[ERROR] Error pausando grabación WebRTC: {e}")
-                                        
-                                        # Guardar en Sheet Informe con estado "Grabación Pausada"
-                                        if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.webrtc_call_sid or ''):
-                                            st.session_state.grabacion_pausada = True
-                                            add_log(f"WEBRTC_GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
-                                            st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                                import traceback
+                                                print(f"[ERROR] Traceback: {traceback.format_exc()}")
+                                                st.error(f"❌ Error pausando grabación: {e}")
                                         else:
-                                            st.error("❌ Error guardando en Sheet Informe")
+                                            print(f"[DEBUG] ⚠️ No hay webrtc_call_sid disponible")
+                                            st.warning("⚠️ No hay SID de llamada WebRTC disponible")
                                         
                                         time.sleep(1)
                                         st.rerun()
