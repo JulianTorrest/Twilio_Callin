@@ -941,23 +941,27 @@ with tab_op:
                                 #         st.error(f"Error al iniciar llamada: {e}")
                                 
                                 # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
-                                components.html(f"""
-                                <button onclick="parent.window.llamarWebRTC('{tel}')" style="
-                                    background: #28a745;
-                                    color: white;
-                                    border: none;
-                                    padding: 12px 20px;
-                                    border-radius: 5px;
-                                    cursor: pointer;
-                                    font-size: 14px;
-                                    font-weight: bold;
-                                    width: 100%;
-                                    margin-top: 5px;
-                                    transition: background 0.3s;
-                                " onmouseover="this.style.background='#218838'" onmouseout="this.style.background='#28a745'">
-                                🎧 LLAMAR (WebRTC)
-                                </button>
-                                """, height=50)
+                                if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
+                                    # Marcar WebRTC como activo y guardar datos
+                                    st.session_state.webrtc_activo = True
+                                    st.session_state.webrtc_numero = tel
+                                    st.session_state.webrtc_nombre = c['nombre']
+                                    st.session_state.t_inicio_dt = datetime.now()
+                                    add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
+                                    st.rerun()
+                                
+                                # Si WebRTC está activo para este contacto, ejecutar JavaScript automáticamente
+                                if st.session_state.webrtc_activo and st.session_state.webrtc_numero == tel:
+                                    components.html(f"""
+                                    <script>
+                                        // Ejecutar llamada WebRTC automáticamente
+                                        if (top.llamarWebRTC) {{
+                                            top.llamarWebRTC('{tel}');
+                                        }} else {{
+                                            console.error('llamarWebRTC no está disponible en top');
+                                        }}
+                                    </script>
+                                    """, height=0)
                                 # ============================================================
                                 
                                 # Opción de reprogramar
