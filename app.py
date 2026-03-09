@@ -1394,26 +1394,25 @@ with tab_op:
                                                             print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
                                                             st.success(f"🎙️ Grabación disponible")
                                                             
-                                                            # La transcripción se genera automáticamente desde TwiML (PCI Mode compatible)
-                                                            st.write("📝 Transcripción automática habilitada (PCI Mode)")
-                                                            print(f"[DEBUG] 🎤 Transcripción automática desde TwiML para {recording_sid}")
+                                                            # Intentar solicitar transcripción manualmente (método compatible con PCI Mode)
+                                                            st.write("📝 Intentando transcripción manual...")
+                                                            print(f"[DEBUG] 🎤 Intentando transcripción manual para {recording_sid}")
                                                             
-                                                            # Esperar un momento para que se genere la transcripción
-                                                            time.sleep(2)
-                                                            
-                                                            # Intentar obtener la transcripción si ya existe
                                                             try:
-                                                                transcriptions = client.transcriptions.list(recording_sid=recording_sid, limit=1)
-                                                                if transcriptions:
-                                                                    transcription_sid = transcriptions[0].sid
-                                                                    st.success(f"✅ Transcripción encontrada: {transcription_sid[:8]}...")
-                                                                    print(f"[DEBUG] ✅ Transcripción encontrada: {transcription_sid}")
+                                                                # Método alternativo para PCI Mode: usar API directamente
+                                                                transcription_sid = solicitar_transcripcion(recording_sid)
+                                                                if transcription_sid:
+                                                                    st.success(f"✅ Transcripción solicitada: {transcription_sid[:8]}...")
+                                                                    print(f"[DEBUG] ✅ Transcripción solicitada manualmente: {transcription_sid}")
                                                                 else:
-                                                                    st.info("📝 Transcripción en proceso...")
-                                                                    print(f"[DEBUG] 📝 Transcripción aún no disponible (se procesará en background)")
+                                                                    st.info("📝 Transcripción no disponible - Se intentará más tarde")
+                                                                    print(f"[DEBUG] 📝 Transcripción manual falló - se procesará en background")
                                                             except Exception as e_trans:
-                                                                print(f"[DEBUG] Transcripción aún no disponible: {e_trans}")
+                                                                print(f"[DEBUG] Error transcripción manual: {e_trans}")
                                                                 st.info("📝 Transcripción se procesará en background")
+                                                            
+                                                            # Pequeña espera para que la transcripción se procese
+                                                            time.sleep(1)
                                                             
                                                             break
                                                         else:
