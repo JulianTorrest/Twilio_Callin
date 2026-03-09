@@ -1026,17 +1026,62 @@ with tab_op:
                                     
                                     # Verificar si la llamada sigue activa en Twilio
                                     call_ended_by_remote = False
-                                    if st.session_state.webrtc_call_sid:
-                                        try:
-                                            remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
-                                            print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
+                                    webrtc_final_status = 'Llamado'  # Por defecto
+                                    
+                            if st.session_state.webrtc_call_sid:
+                                try:
+                                    remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
+                                    print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
                                             
-                                            # Si la llamada terminó (usuario colgó), limpiar estado
-                                            if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
-                                                call_ended_by_remote = True
-                                                st.warning(f"⚠️ Llamada terminada por el usuario: {remote_call.status}")
-                                        except Exception as e:
-                                            print(f"[ERROR] Error verificando estado WebRTC: {e}")
+                                    # Si la llamada terminó, determinar el estado final
+                                    if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
+                                        call_ended_by_remote = True
+                                        
+                                        # Obtener answered_by para clasificar correctamente
+                                        answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
+                                        duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
+                                        print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s")
+                                        
+                                        # CLASIFICACIÓN AUTOMÁTICA DE ESTADOS
+                                        # Caso 1: Celular apagado, ocupado, falló o cancelado
+                                        if remote_call.status in ['no-answer', 'busy', 'failed', 'canceled']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
+                                            print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
+                                        
+                                        # Caso 2: Contestó máquina o fax
+                                        elif answered_by in ['machine_start', 'fax']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Contestó máquina/buzón: {answered_by}")
+                                            print(f"[DEBUG] Clasificado como No Contesto por máquina/buzón")
+                                        
+                                        # Caso 3: Contestó una persona (humano)
+                                        elif answered_by == 'human':
+                                            webrtc_final_status = 'Llamado'
+                                            st.success(f"✅ Llamada contestada por persona")
+                                            print(f"[DEBUG] Clasificado como Llamado por humano")
+                                        
+                                        # Caso 4: Completó pero no sabemos quién contestó - usar duración
+                                        elif remote_call.status == 'completed' and answered_by == 'unknown':
+                                            # Si la duración es muy corta (<10s), probablemente no contestó o colgó inmediatamente
+                                            if duracion_twilio < 10:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó o rechazó")
+                                                print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
+                                            else:
+                                                webrtc_final_status = 'Llamado'
+                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
+                                                print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
+                                        
+                                        # Caso 5: Cualquier otro caso completado
+                                        else:
+                                            webrtc_final_status = 'Llamado'
+                                            st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
+                                            print(f"[DEBUG] Clasificado como Llamado por defecto")
+                                        
+                                        print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
+                                except Exception as e:
+                                    print(f"[ERROR] Error verificando estado WebRTC: {e}")
                                     
                                     # Botones en columnas (similar a Conference Call)
                                     finalizar_webrtc = False
@@ -1091,17 +1136,17 @@ with tab_op:
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
+                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
-                                        print(f"[DEBUG] DataFrame local actualizado. Estado: Llamado")
+                                        print(f"[DEBUG] DataFrame local actualizado. Estado: {webrtc_final_status}")
                                         
                                         # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
                                         print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
-                                        st.write(f"💾 Guardando gestión: Llamado")
+                                        st.write(f"💾 Guardando gestión: {webrtc_final_status}")
                                         
                                         if URL_SHEET_INFORME:
                                             try:
@@ -1131,7 +1176,7 @@ with tab_op:
                                                     'agente_id': [st.session_state.agente_id],
                                                     'nombre': [c['nombre']],
                                                     'telefono': [tel],
-                                                    'estado': ['Llamado'],
+                                                    'estado': [webrtc_final_status],
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
@@ -1169,8 +1214,8 @@ with tab_op:
                                                 
                                                 # Guardar en Sheet Informe
                                                 if update_sheet(df_informe_actualizado, "0"):
-                                                    st.success(f"✅ Guardado en Sheet Informe: Llamado")
-                                                    add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - Llamado", "DATA")
+                                                    st.success(f"✅ Guardado en Sheet Informe: {webrtc_final_status}")
+                                                    add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
                                                     st.warning("⚠️ Error guardando en Sheet Informe")
                                                     
@@ -1186,7 +1231,7 @@ with tab_op:
                                                 # Actualizar el DataFrame completo y escribirlo de vuelta
                                                 if update_sheet(st.session_state.df_contactos, "1"):
                                                     st.success("✅ Estado actualizado en Sheet Llamadas")
-                                                    add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - Llamado", "DATA")
+                                                    add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
                                                     st.warning("⚠️ Error actualizando Sheet Llamadas")
                                             except Exception as e_llamadas:
