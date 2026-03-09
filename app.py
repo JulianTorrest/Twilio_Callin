@@ -1219,6 +1219,14 @@ with tab_op:
                                     
                                     # Manejar finalización de WebRTC (manual o automática)
                                     if finalizar_webrtc or call_ended_by_remote:
+                                        # Si es finalización manual, colgar la llamada en Twilio primero
+                                        if finalizar_webrtc and st.session_state.webrtc_call_sid:
+                                            try:
+                                                client.calls(st.session_state.webrtc_call_sid).update(status='completed')
+                                                time.sleep(1)
+                                            except Exception as e:
+                                                print(f"[ERROR] Error colgando llamada: {e}")
+                                        
                                         # Guardar gestión
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
