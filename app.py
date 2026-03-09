@@ -1413,6 +1413,7 @@ with tab_op:
                                         st.rerun()
 
                                 # Monitor para Conference Call
+                            if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo:
                                 try:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
