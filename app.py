@@ -729,40 +729,48 @@ with tab_op:
         }}
         
         // Función para hacer llamadas WebRTC
-        function llamarWebRTC(numero) {{
+        async function llamarWebRTC(numero) {{
             if (!device) {{
                 alert('⚠️ WebRTC no está inicializado. Espera a que aparezca "Audio listo"');
                 return;
             }}
             
-            console.log('Iniciando llamada WebRTC a:', numero);
+            console.log('📞 Iniciando llamada WebRTC a:', numero);
             
             try {{
                 const params = {{
                     To: numero
                 }};
                 
-                currentConnection = device.connect(params);
+                // En SDK v2.x, device.connect() retorna una Promise
+                currentConnection = await device.connect(params);
+                console.log('✅ Conexión establecida:', currentConnection);
                 
+                // Eventos del Call object
                 currentConnection.on('accept', function() {{
-                    console.log('Llamada conectada');
+                    console.log('✅ Llamada aceptada/conectada');
                 }});
                 
                 currentConnection.on('disconnect', function() {{
-                    console.log('Llamada finalizada');
+                    console.log('📴 Llamada finalizada');
                     currentConnection = null;
                 }});
                 
                 currentConnection.on('error', function(error) {{
-                    console.error('Error en llamada:', error);
+                    console.error('❌ Error en llamada:', error);
                     alert('❌ Error: ' + error.message);
                 }});
                 
+                currentConnection.on('reject', function() {{
+                    console.log('❌ Llamada rechazada');
+                    currentConnection = null;
+                }});
+                
             }} catch(error) {{
-                console.error('Error iniciando llamada:', error);
+                console.error('❌ Error iniciando llamada:', error);
                 alert('❌ Error: ' + error.message);
             }}
-        }};
+        }}
         
         window.llamarWebRTC = llamarWebRTC;
         
@@ -1048,28 +1056,52 @@ with tab_op:
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
                                         
-                                        # Actualizar DataFrame local
+                                        # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
+                                        print(f"[DEBUG] WebRTC - Actualizando DataFrame local para idx={idx}")
                                         st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
+                                        st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
+                                        print(f"[DEBUG] WebRTC - DataFrame local actualizado")
                                         
-                                        # Guardar en Sheet Informe
-                                        if guardar_en_sheet_informe(c, tel, "Llamado", nota, dur, ''):
+                                        # --- PASO 2: GUARDAR EN SHEET INFORME ---
+                                        st.write("💾 Guardando gestión WebRTC...")
+                                        if guardar_en_sheet_informe(c, tel, "Llamado", nota, dur, st.session_state.webrtc_call_sid or ''):
                                             st.success("✅ Guardado en Sheet Informe")
+                                            add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - Llamado", "DATA")
+                                        else:
+                                            st.warning("⚠️ Error guardando en Sheet Informe")
+                                        
+                                        # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
+                                        print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
+                                        if URL_SHEET_CONTACTOS:
+                                            try:
+                                                st.write("🔄 Actualizando estado en Sheet Llamadas...")
+                                                
+                                                # Actualizar el DataFrame completo y escribirlo de vuelta
+                                                if update_sheet(st.session_state.df_contactos, "1"):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas")
+                                                    add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - Llamado", "DATA")
+                                                else:
+                                                    st.warning("⚠️ Error actualizando Sheet Llamadas")
+                                            except Exception as e_llamadas:
+                                                st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
+                                                print(f"[ERROR] WebRTC Update Llamadas: {e_llamadas}")
                                         
                                         add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
                                         
-                                        # Limpiar estado WebRTC
+                                        # --- PASO 4: LIMPIEZA DE ESTADO ---
+                                        print(f"[DEBUG] WebRTC - Limpiando estado de llamada")
                                         st.session_state.webrtc_activo = False
                                         st.session_state.webrtc_numero = None
                                         st.session_state.webrtc_nombre = None
                                         st.session_state.webrtc_call_sid = None
                                         st.session_state.grabacion_pausada = False
                                         
-                                        st.success("✅ Llamada WebRTC finalizada")
-                                        time.sleep(1)
+                                        st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
+                                        time.sleep(2)
                                         st.rerun()
                                     
                                     # Auto-refresh para actualizar cronómetro
