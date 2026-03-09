@@ -443,91 +443,80 @@ if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = Fal
 if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = None
 if 'webrtc_nombre' not in st.session_state: st.session_state.webrtc_nombre = None
 if 'webrtc_call_sid' not in st.session_state: st.session_state.webrtc_call_sid = None
-if 'llamadas_pendientes_grabacion' not in st.session_state: st.session_state.llamadas_pendientes_grabacion = []
 
 # --- FUNCIÓN DE VERIFICACIÓN DIFERIDA DE GRABACIONES ---
 def verificar_grabaciones_pendientes():
     """
-    Verifica las grabaciones pendientes y actualiza el Sheet Informe cuando encuentra la URL.
-    Se ejecuta automáticamente cada vez que se renderiza la app.
+    Verifica grabaciones pendientes leyendo desde Sheet Informe.
+    Busca registros con grabacion_pendiente='SI' y url_grabacion vacía.
     """
-    if not st.session_state.llamadas_pendientes_grabacion:
-        return
-    
-    now = datetime.now()
-    llamadas_actualizadas = []
-    
-    for llamada in st.session_state.llamadas_pendientes_grabacion:
-        call_sid = llamada['call_sid']
-        timestamp_finalizacion = llamada['timestamp']
-        tiempo_transcurrido = (now - timestamp_finalizacion).total_seconds()
+    try:
+        df_informe = read_sheet("0")
+        if df_informe.empty:
+            return
         
-        # Solo verificar si han pasado al menos 5 minutos (300 segundos)
-        if tiempo_transcurrido < 300:
-            continue
+        # Asegurar que existe la columna grabacion_pendiente
+        if 'grabacion_pendiente' not in df_informe.columns:
+            df_informe['grabacion_pendiente'] = ''
         
-        # Si ya pasaron más de 15 minutos, dejar de intentar
-        if tiempo_transcurrido > 900:
-            print(f"[GRABACION] ⏰ Timeout para {call_sid} - Más de 15 minutos sin grabación")
-            llamadas_actualizadas.append(call_sid)
-            continue
+        # Filtrar registros con grabación pendiente
+        mask_pendientes = (df_informe['grabacion_pendiente'] == 'SI') & (df_informe['url_grabacion'].fillna('') == '')
+        if not mask_pendientes.any():
+            return
         
-        try:
-            # Buscar la grabación en Twilio
-            recordings = client.recordings.list(call_sid=call_sid, limit=1)
+        df_pendientes = df_informe[mask_pendientes].copy()
+        print(f"[GRABACION] 🔍 Verificando {len(df_pendientes)} grabaciones pendientes")
+        
+        now = datetime.now()
+        grabaciones_actualizadas = 0
+        
+        for idx, row in df_pendientes.iterrows():
+            call_sid = row.get('sid_llamada', '')
+            if not call_sid or pd.isna(call_sid):
+                continue
             
-            if recordings:
-                recording_sid = recordings[0].sid
-                url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
-                
-                print(f"[GRABACION] ✅ Grabación encontrada para {call_sid}: {url_grabacion}")
-                
-                # Actualizar Sheet Informe con la URL de grabación
-                try:
-                    # Leer Sheet Informe actual
-                    df_informe = read_sheet("0")
+            try:
+                fecha_llamada = pd.to_datetime(row['fecha_llamada'])
+                tiempo_transcurrido = (now - fecha_llamada).total_seconds()
+            except:
+                continue
+            
+            # Solo verificar si han pasado al menos 5 minutos
+            if tiempo_transcurrido < 300:
+                continue
+            
+            # Si ya pasaron más de 15 minutos, marcar como timeout
+            if tiempo_transcurrido > 900:
+                df_informe.at[idx, 'grabacion_pendiente'] = 'TIMEOUT'
+                grabaciones_actualizadas += 1
+                print(f"[GRABACION] ⏰ Timeout para {call_sid[:8]}...")
+                continue
+            
+            try:
+                recordings = client.recordings.list(call_sid=call_sid, limit=1)
+                if recordings:
+                    recording_sid = recordings[0].sid
+                    url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                    df_informe.at[idx, 'url_grabacion'] = url_grabacion
+                    df_informe.at[idx, 'grabacion_pendiente'] = 'NO'
                     
-                    # Buscar la fila correspondiente al call_sid
-                    mask = df_informe['sid_llamada'] == call_sid
+                    # Solicitar transcripción
+                    if pd.isna(row.get('transcription_sid', '')) or row.get('transcription_sid', '') == '':
+                        transcription_sid = solicitar_transcripcion(recording_sid)
+                        if transcription_sid:
+                            df_informe.at[idx, 'transcription_sid'] = transcription_sid
                     
-                    if mask.any():
-                        # Actualizar la URL de grabación
-                        df_informe.loc[mask, 'url_grabacion'] = url_grabacion
-                        
-                        # Solicitar transcripción si aún no se ha hecho
-                        if pd.isna(df_informe.loc[mask, 'transcription_sid'].iloc[0]) or df_informe.loc[mask, 'transcription_sid'].iloc[0] == '':
-                            transcription_sid = solicitar_transcripcion(recording_sid)
-                            if transcription_sid:
-                                df_informe.loc[mask, 'transcription_sid'] = transcription_sid
-                                print(f"[GRABACION] 📝 Transcripción solicitada: {transcription_sid}")
-                        
-                        # Guardar en Sheet Informe
-                        if update_sheet(df_informe, "0"):
-                            print(f"[GRABACION] 💾 Sheet Informe actualizado con URL de grabación")
-                            add_log(f"GRABACION_ACTUALIZADA: {call_sid[:8]}... - URL obtenida", "DATA")
-                            llamadas_actualizadas.append(call_sid)
-                        else:
-                            print(f"[GRABACION] ⚠️ Error actualizando Sheet Informe")
-                    else:
-                        print(f"[GRABACION] ⚠️ No se encontró registro en Sheet Informe para {call_sid}")
-                        llamadas_actualizadas.append(call_sid)
-                        
-                except Exception as e:
-                    print(f"[GRABACION] ❌ Error actualizando Sheet Informe: {e}")
-            else:
-                print(f"[GRABACION] ⏳ Grabación aún no disponible para {call_sid} ({tiempo_transcurrido:.0f}s)")
-                
-        except Exception as e:
-            print(f"[GRABACION] ❌ Error verificando grabación para {call_sid}: {e}")
-    
-    # Eliminar llamadas ya actualizadas de la lista pendiente
-    st.session_state.llamadas_pendientes_grabacion = [
-        l for l in st.session_state.llamadas_pendientes_grabacion 
-        if l['call_sid'] not in llamadas_actualizadas
-    ]
-    
-    if llamadas_actualizadas:
-        print(f"[GRABACION] 🔄 Actualizadas {len(llamadas_actualizadas)} grabaciones. Pendientes: {len(st.session_state.llamadas_pendientes_grabacion)}")
+                    grabaciones_actualizadas += 1
+                    print(f"[GRABACION] ✅ URL obtenida para {call_sid[:8]}...")
+            except Exception as e:
+                print(f"[GRABACION] ❌ Error verificando {call_sid[:8]}...: {e}")
+        
+        if grabaciones_actualizadas > 0:
+            if update_sheet(df_informe, "0"):
+                print(f"[GRABACION] 💾 {grabaciones_actualizadas} grabaciones actualizadas")
+                add_log(f"GRABACIONES_ACTUALIZADAS: {grabaciones_actualizadas}", "DATA")
+    except Exception as e:
+        print(f"[GRABACION] ❌ Error: {e}")
 
 # --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
@@ -1423,7 +1412,8 @@ with tab_op:
                                                     'phone_number_sid': [phone_number_sid if 'phone_number_sid' in locals() else ''],
                                                     'error_code': [codigo_error],
                                                     'url_grabacion': [url_grabacion],
-                                                    'transcription_sid': [transcription_sid if 'transcription_sid' in locals() else '']
+                                                    'transcription_sid': [transcription_sid if 'transcription_sid' in locals() else ''],
+                                                    'grabacion_pendiente': ['SI' if not url_grabacion else 'NO']
                                                 })
                                                 
                                                 # Leer Sheet Informe actual (con caché para evitar rate limit)
@@ -1455,16 +1445,9 @@ with tab_op:
                                                     st.success(f"✅ Guardado en Sheet Informe: {webrtc_final_status}")
                                                     add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                     
-                                                    # Si no se obtuvo URL de grabación, agregar a lista de pendientes
-                                                    if not url_grabacion and st.session_state.webrtc_call_sid:
-                                                        st.session_state.llamadas_pendientes_grabacion.append({
-                                                            'call_sid': st.session_state.webrtc_call_sid,
-                                                            'timestamp': datetime.now(),
-                                                            'nombre': c['nombre'],
-                                                            'tipo': 'WebRTC'
-                                                        })
-                                                        print(f"[GRABACION] 📋 Llamada agregada a pendientes: {st.session_state.webrtc_call_sid}")
+                                                    if not url_grabacion:
                                                         st.info("📋 Grabación pendiente - Se verificará en 5 minutos")
+                                                        print(f"[GRABACION] 📋 Marcada como pendiente en Sheet Informe")
                                                 else:
                                                     st.warning("⚠️ Error guardando en Sheet Informe")
                                                     
@@ -1777,6 +1760,7 @@ with tab_op:
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
                                                 
+
                                                 # Preparar fila para Sheet Informe
                                                 fila_informe = pd.DataFrame({
                                                     'agente_id': [st.session_state.agente_id],
@@ -1792,9 +1776,10 @@ with tab_op:
                                                     'duracion_facturada': [duracion_facturada],
                                                     'estado_respuesta': [estado_respuesta],
                                                     'codigo_error': [codigo_error],
-                                                    'transcription_sid': [transcription_sid if transcription_sid else '']
+                                                    'transcription_sid': [transcription_sid if transcription_sid else ''],
+                                                    'grabacion_pendiente': ['SI' if not url_grabacion else 'NO']
                                                 })
-                                                
+
                                                 # Leer Sheet Informe actual (con caché para evitar rate limit)
                                                 try:
                                                     # Usar caché de session_state para evitar múltiples lecturas
@@ -1813,27 +1798,22 @@ with tab_op:
                                                     print(f"[ERROR] Error leyendo Informe: {e_read}")
                                                     df_informe_actual = pd.DataFrame()
                                                 
+
                                                 # Agregar nuevo registro
                                                 if df_informe_actual.empty:
                                                     df_informe_actualizado = fila_informe.copy()
                                                 else:
                                                     df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
                                                 
+
                                                 # Guardar en Sheet Informe
                                                 if update_sheet(df_informe_actualizado, "0"):
                                                     st.success(f"✅ Guardado en Sheet Informe: {final_status}")
                                                     add_log(f"SYNC_INFORME: {c['nombre']} - {final_status}", "DATA")
                                                     
-                                                    # Si no se obtuvo URL de grabación, agregar a lista de pendientes
-                                                    if not url_grabacion and st.session_state.llamada_activa_sid:
-                                                        st.session_state.llamadas_pendientes_grabacion.append({
-                                                            'call_sid': st.session_state.llamada_activa_sid,
-                                                            'timestamp': datetime.now(),
-                                                            'nombre': c['nombre'],
-                                                            'tipo': 'Conference'
-                                                        })
-                                                        print(f"[GRABACION] 📋 Llamada Conference agregada a pendientes: {st.session_state.llamada_activa_sid}")
+                                                    if not url_grabacion:
                                                         st.info("📋 Grabación pendiente - Se verificará en 5 minutos")
+                                                        print(f"[GRABACION] 📋 Marcada como pendiente en Sheet Informe")
                                                 else:
                                                     st.warning("⚠️ Error guardando en Sheet Informe")
                                                     
