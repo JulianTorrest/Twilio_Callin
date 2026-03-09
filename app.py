@@ -688,17 +688,13 @@ with tab_op:
                 const data = await response.json();
                 console.log('✅ Token obtenido exitosamente');
                 
-                // Crear Device con SDK v2.x
+                // Crear Device con SDK v1.14
                 updateStatus('🟡 Configurando dispositivo...');
-                device = new Twilio.Device(data.token, {{
-                    codecPreferences: [Twilio.Device.CodecName.Opus, Twilio.Device.CodecName.PCMU],
-                    logLevel: 1,
-                    edge: 'ashburn'
-                }});
+                device = new Twilio.Device();
                 
-                // Event listeners para SDK v2.x
-                device.on('registered', function() {{
-                    console.log('✅ Twilio Device registrado');
+                // Event listeners ANTES de setup (SDK v1.14)
+                device.on('ready', function() {{
+                    console.log('✅ Twilio Device listo');
                     updateStatus('🟢 Audio listo - WebRTC conectado');
                 }});
                 
@@ -707,15 +703,26 @@ with tab_op:
                     updateStatus('🔴 Error: ' + (error.message || 'Error desconocido'));
                 }});
                 
-                device.on('incoming', function(call) {{
-                    console.log('📞 Llamada entrante');
-                    call.accept();
+                device.on('connect', function(connection) {{
+                    console.log('📞 Llamada conectada');
                 }});
                 
-                // Registrar Device (SDK v2.x)
-                updateStatus('🟡 Registrando dispositivo...');
-                await device.register();
-                console.log('✅ Device registrado exitosamente');
+                device.on('disconnect', function(connection) {{
+                    console.log('📞 Llamada desconectada');
+                }});
+                
+                device.on('incoming', function(connection) {{
+                    console.log('📞 Llamada entrante');
+                    connection.accept();
+                }});
+                
+                // Setup Device con token (SDK v1.14)
+                updateStatus('🟡 Inicializando dispositivo...');
+                device.setup(data.token, {{
+                    codecPreferences: ['opus', 'pcmu'],
+                    debug: true
+                }});
+                console.log('✅ Device setup completado');
                 
             }} catch(error) {{
                 console.error('❌ Error inicializando Twilio:', error);
