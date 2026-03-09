@@ -985,6 +985,7 @@ with tab_op:
                                         conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                         st.session_state.llamada_activa_sid = call_cliente.sid
                                         st.session_state.conference_name = conference_name
+                                        st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
                                         st.session_state.t_inicio_dt = datetime.now()
                                         print(f"[DEBUG] Conference creada: {conference_name}")
                                         
@@ -1038,12 +1039,27 @@ with tab_op:
                                 if st.button("✅ Programar", key=f"prog_{idx}"):
                                     # Combinar fecha y hora
                                     fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                                    
+                                    # Actualizar DataFrame local
                                     st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
                                     st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                     st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                                    add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                                    st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                    
+                                    # Actualizar Sheet Llamadas
+                                    if URL_SHEET_CONTACTOS:
+                                        try:
+                                            if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                                add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                                                st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                            else:
+                                                st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
+                                        except Exception as e:
+                                            st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
+                                            print(f"[ERROR] Programar llamada - Update Sheet: {e}")
+                                    else:
+                                        st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                    
                                     time.sleep(1)
                                     st.rerun()
                             else:
@@ -1424,8 +1440,8 @@ with tab_op:
                                         time.sleep(1)
                                         st.rerun()
 
-                                # Monitor para Conference Call
-                            if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo:
+                                # Monitor para Conference Call Y si este es el contacto activo
+                            if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
                                 try:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
@@ -1439,7 +1455,7 @@ with tab_op:
                                     print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
                                     remote = client.calls(st.session_state.llamada_activa_sid).fetch()
                                     print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
-                                    st.info(f"📞 Estado Twilio: {remote.status}")
+                                    st.info(f" Estado Twilio: {remote.status}")
                                     
                                     # 2. Definir condiciones de terminación
                                     call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
@@ -1564,6 +1580,15 @@ with tab_op:
                                     print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
                                     if finalizar_manual or call_ended_by_system:
                                         print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
+                                        
+                                        # Si es finalización manual, colgar la llamada en Twilio primero
+                                        if finalizar_manual and st.session_state.llamada_activa_sid:
+                                            try:
+                                                client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                time.sleep(1)
+                                                print(f"[DEBUG] Llamada Conference colgada manualmente")
+                                            except Exception as e:
+                                                print(f"[ERROR] Error colgando llamada Conference: {e}")
                                         
                                         # Obtener datos de la llamada para clasificación
                                         answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
@@ -1761,6 +1786,7 @@ with tab_op:
                                         st.write("✅ Gestión completada - Pasando al siguiente contacto...")
                                         st.session_state.llamada_activa_sid = None
                                         st.session_state.conference_name = None
+                                        st.session_state.conference_idx = None
                                         st.session_state.grabacion_pausada = False
                                         time.sleep(2)
                                         st.rerun()
