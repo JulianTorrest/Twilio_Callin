@@ -637,7 +637,6 @@ with tab_op:
     <script>
     {twilio_sdk_content}
     console.log('✅ Twilio SDK cargado desde archivo local');
-    setTimeout(initTwilioDevice, 100);
     </script>
     <script>
         var device;
@@ -763,6 +762,9 @@ with tab_op:
                 currentConnection.disconnect();
             }}
         }}
+        
+        // Inicializar Twilio Device cuando el DOM esté listo
+        setTimeout(initTwilioDevice, 100);
     </script>
     """
     
