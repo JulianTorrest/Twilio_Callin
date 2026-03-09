@@ -27,6 +27,8 @@ try:
     auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
     twilio_number = st.secrets.get("TWILIO_NUMBER", "+17068069672")
     function_url = st.secrets["TWILIO_FUNCTION_URL"]
+    # Extraer la URL base para el endpoint /token (sin /hacer-llamada)
+    function_url_base = function_url.replace('/hacer-llamada', '') if '/hacer-llamada' in function_url else function_url
     forms_base_url = st.secrets.get("MS_FORMS_URL", "https://forms.office.com/r/tu_codigo")
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
     URL_SHEET_CONTACTOS = st.secrets.get("GSHEET_CONTACTOS_URL")
@@ -671,7 +673,7 @@ with tab_op:
                 updateStatus('🟡 Conectando con Twilio...');
                 
                 // Obtener token
-                const tokenUrl = `{function_url}/token?identity={st.session_state.agente_id}`;
+                const tokenUrl = `{function_url_base}/token?identity={st.session_state.agente_id}`;
                 console.log('🔍 URL del token:', tokenUrl);
                 
                 const response = await fetch(tokenUrl);
