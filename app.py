@@ -54,10 +54,75 @@ except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
 
+# --- SISTEMA DE RATE LIMITING PARA GOOGLE SHEETS API ---
+class RateLimiter:
+    """Control de rate limiting para Google Sheets API
+    
+    Límites de Google Sheets API:
+    - 100 requests por 100 segundos por usuario
+    - ~60 escrituras por minuto
+    
+    Este sistema monitorea las operaciones y agrega delays automáticos
+    cuando se acerca al 90% del límite.
+    """
+    def __init__(self, max_requests_per_minute=50, warning_threshold=0.9):
+        self.max_requests = max_requests_per_minute
+        self.warning_threshold = warning_threshold
+        self.request_times = []
+        self.warning_shown = False
+    
+    def check_and_wait(self, operation_type="read"):
+        """Verifica el rate limit y espera si es necesario
+        
+        Args:
+            operation_type: 'read' o 'write'
+        """
+        now = time.time()
+        
+        # Limpiar requests antiguos (más de 60 segundos)
+        self.request_times = [t for t in self.request_times if now - t < 60]
+        
+        # Calcular uso actual
+        current_usage = len(self.request_times)
+        usage_percentage = current_usage / self.max_requests
+        
+        # Si estamos al 90% o más del límite
+        if usage_percentage >= self.warning_threshold:
+            wait_time = 3  # Esperar 3 segundos
+            if not self.warning_shown:
+                print(f"[RATE LIMIT] ⚠️ Uso al {usage_percentage*100:.1f}% ({current_usage}/{self.max_requests})")
+                print(f"[RATE LIMIT] Aplicando delay de {wait_time}s para evitar quota exceeded")
+                self.warning_shown = True
+            time.sleep(wait_time)
+        elif usage_percentage >= 0.7:  # Al 70% empezar a reducir velocidad
+            time.sleep(1)
+            self.warning_shown = False
+        else:
+            self.warning_shown = False
+        
+        # Registrar esta operación
+        self.request_times.append(now)
+        
+        # Log de debug
+        if current_usage % 10 == 0 and current_usage > 0:
+            print(f"[RATE LIMIT] Operaciones en último minuto: {current_usage}/{self.max_requests}")
+    
+    def reset(self):
+        """Resetear el contador"""
+        self.request_times = []
+        self.warning_shown = False
+
+# Inicializar rate limiter global
+if 'rate_limiter' not in st.session_state:
+    st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=50, warning_threshold=0.9)
+
+rate_limiter = st.session_state.rate_limiter
+
 # --- 2. FUNCIONES HELPER PARA GOOGLE SHEETS ---
 def read_sheet(worksheet_name="0"):
     """Lee datos de Google Sheets usando gspread"""
     try:
+        rate_limiter.check_and_wait(operation_type="read")
         worksheet = spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else spreadsheet.worksheet(worksheet_name)
         data = worksheet.get_all_values()
         if len(data) > 0:
@@ -76,6 +141,9 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         sheet_url: URL del Google Sheet (opcional, usa spreadsheet por defecto)
     """
     try:
+        # Verificar rate limit antes de escribir
+        rate_limiter.check_and_wait(operation_type="write")
+        
         # Determinar qué spreadsheet usar
         if sheet_url:
             # Abrir el spreadsheet específico desde la URL
@@ -87,8 +155,10 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         # Obtener el worksheet
         worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
         
-        # Limpiar y actualizar
+        # Limpiar y actualizar (estas son 2 operaciones)
+        rate_limiter.check_and_wait(operation_type="write")
         worksheet.clear()
+        rate_limiter.check_and_wait(operation_type="write")
         worksheet.update([df.columns.values.tolist()] + df.values.tolist())
         return True
     except Exception as e:
@@ -151,6 +221,65 @@ def cargar_contactos_agente(cedula_agente):
         columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
                               'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
         return pd.DataFrame(columns=columnas_requeridas)
+
+def guardar_en_sheet_informe(contacto, telefono, estado, nota, duracion_seg, sid_llamada=''):
+    """Guarda un registro en el Sheet Informe
+    
+    Args:
+        contacto: Diccionario con datos del contacto
+        telefono: Número de teléfono
+        estado: Estado de la llamada ('Llamado', 'No Contesto', etc.)
+        nota: Observaciones del agente
+        duracion_seg: Duración en segundos
+        sid_llamada: SID de la llamada de Twilio (opcional)
+    
+    Returns:
+        bool: True si se guardó exitosamente, False en caso contrario
+    """
+    try:
+        t_fin = datetime.now()
+        
+        # Preparar fila para Sheet Informe
+        fila_informe = pd.DataFrame({
+            'agente_id': [st.session_state.agente_id],
+            'nombre': [contacto['nombre']],
+            'telefono': [telefono],
+            'estado': [estado],
+            'observacion': [nota],
+            'duracion_seg': [duracion_seg],
+            'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
+            'sid_llamada': [sid_llamada],
+            'url_grabacion': [''],
+            'precio_llamada': ['0'],
+            'duracion_facturada': ['0'],
+            'estado_respuesta': ['paused' if estado == 'Grabación Pausada' else 'unknown'],
+            'codigo_error': ['']
+        })
+        
+        # Leer Sheet Informe actual (con caché)
+        if 'df_informe_cache' not in st.session_state or st.session_state.get('informe_cache_time', 0) < time.time() - 30:
+            df_informe_actual = read_sheet("0")
+            st.session_state.df_informe_cache = df_informe_actual
+            st.session_state.informe_cache_time = time.time()
+        else:
+            df_informe_actual = st.session_state.df_informe_cache
+        
+        # Agregar nuevo registro
+        if df_informe_actual.empty:
+            df_informe_actualizado = fila_informe.copy()
+        else:
+            df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
+        
+        # Guardar en Sheet Informe
+        if update_sheet(df_informe_actualizado, "0"):
+            # Actualizar caché
+            st.session_state.df_informe_cache = df_informe_actualizado
+            st.session_state.informe_cache_time = time.time()
+            return True
+        return False
+    except Exception as e:
+        print(f"[ERROR] Error guardando en Sheet Informe: {e}")
+        return False
 
 def guardar_logs_en_drive():
     """Guarda los logs en un archivo de texto en Google Drive"""
@@ -218,7 +347,7 @@ if 'agente_id' not in st.session_state:
                 numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
                 
                 if not numero_celular:
-                    st.error(f"⚠️ No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
+                    st.error(f" No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
                     st.stop()
                 
                 st.session_state.agente_id = ced
@@ -245,22 +374,26 @@ if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
 if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
 if 'numero_celular_agente' not in st.session_state: st.session_state.numero_celular_agente = None
+if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
+if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = None
+if 'webrtc_nombre' not in st.session_state: st.session_state.webrtc_nombre = None
+if 'webrtc_call_sid' not in st.session_state: st.session_state.webrtc_call_sid = None
 
 # --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
     if st.session_state.numero_celular_agente:
-        st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
+        st.caption(f"Celular: {st.session_state.numero_celular_agente}")
     
     if not st.session_state.en_pausa:
-        if st.button("☕ Iniciar Pausa"):
+        if st.button("Iniciar Pausa"):
             st.session_state.en_pausa = True
             st.session_state.pausa_inicio = datetime.now()
             add_log("INICIO_PAUSA", "ESTADO")
             st.rerun()
     else:
         st.warning("EN PAUSA")
-        if st.button("✅ Volver"):
+        if st.button("Volver"):
             st.session_state.en_pausa = False
             add_log("FIN_PAUSA", "ESTADO")
             st.rerun()
@@ -272,9 +405,9 @@ with st.sidebar:
             st.session_state.df_contactos = cargar_contactos_agente(st.session_state.agente_id)
             if not st.session_state.df_contactos.empty:
                 add_log(f"CONTACTOS_RECARGADOS: {len(st.session_state.df_contactos)} contactos", "DATA")
-                st.success(f"✅ {len(st.session_state.df_contactos)} contactos cargados")
+                st.success(f"{len(st.session_state.df_contactos)} contactos cargados")
             else:
-                st.warning("⚠️ No hay contactos asignados a tu cédula")
+                st.warning("No hay contactos asignados a tu cédula")
             time.sleep(1)
             st.rerun()
 
@@ -285,13 +418,13 @@ with st.sidebar:
     # Botón para guardar logs
     if st.button("💾 Guardar Logs"):
         if guardar_logs_en_drive():
-            st.success("✅ Logs guardados en Drive")
+            st.success("Logs guardados en Drive")
         else:
-            st.error("❌ Error guardando logs")
+            st.error("Error guardando logs")
     
     if st.button("Cerrar Sesión"):
         # Guardar logs deshabilitado para evitar quota de Drive
-        # Si necesitas guardar logs, usa el botón "💾 Guardar Logs" antes de cerrar sesión
+        # Si necesitas guardar logs, usa el botón "Guardar Logs" antes de cerrar sesión
         add_log("LOGOUT", "AUTH")
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
@@ -310,10 +443,10 @@ if st.session_state.df_contactos is not None:
     total_programadas = len(df[df['estado'] == 'Programada'])
     total_llamados = len(df[df['estado'] == 'Llamado'])
     
-    col1.metric("⏳ Pendientes", total_pendientes)
-    col2.metric("📵 No Contestaron", total_no_contestaron)
-    col3.metric("📅 Programadas", total_programadas)
-    col4.metric("✅ Llamados", total_llamados)
+    col1.metric(" Pendientes", total_pendientes)
+    col2.metric(" No Contestaron", total_no_contestaron)
+    col3.metric(" Programadas", total_programadas)
+    col4.metric(" Llamados", total_llamados)
     
     # Barras de progreso
     st.divider()
@@ -353,7 +486,7 @@ try:
 except:
     df_historico = pd.DataFrame()
 
-tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
+tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs([" Operación", " Mis Métricas", " Supervisor", " Auditoría", " Pruebas"])
 
 with tab_met:
     st.subheader("Rendimiento del Agente")
@@ -390,15 +523,15 @@ with tab_aud:
 
 # --- TAB DE PRUEBAS ---
 with tab_pruebas:
-    st.subheader("🧪 Módulo de Pruebas de Llamadas")
+    st.subheader(" Módulo de Pruebas de Llamadas")
     st.write("Prueba la calidad de las llamadas con Click-to-Call")
     
     col_test1, col_test2 = st.columns(2)
     
     with col_test1:
         st.write("**Configuración de Llamada de Prueba**")
-        numero_destino = st.text_input("📱 Número Destino (a quién llamar):", value="+57", key="test_destino")
-        numero_origen = st.text_input("📞 Número Origen (tu número):", value="+57", key="test_origen")
+        numero_destino = st.text_input(" Número Destino (a quién llamar):", value="+57", key="test_destino")
+        numero_origen = st.text_input(" Número Origen (tu número):", value="+57", key="test_origen")
         
         st.info("""**Cómo funciona:**
         1. Twilio llama primero al **Número Destino**
@@ -414,7 +547,7 @@ with tab_pruebas:
             st.session_state.test_call_sid = None
         
         if st.session_state.test_call_sid is None:
-            if st.button("🚀 INICIAR LLAMADA DE PRUEBA", type="primary"):
+            if st.button(" INICIAR LLAMADA DE PRUEBA", type="primary"):
                 if len(numero_destino) > 5 and len(numero_origen) > 5:
                     try:
                         # Crear TwiML que conecta las dos llamadas
@@ -436,28 +569,28 @@ with tab_pruebas:
                         )
                         
                         st.session_state.test_call_sid = call.sid
-                        st.success(f"✅ Llamada iniciada: {call.sid}")
-                        st.info(f"📞 Llamando a {numero_destino}...")
+                        st.success(f"✅Llamada iniciada: {call.sid}")
+                        st.info(f" Llamando a {numero_destino}...")
                         add_log(f"TEST_CALL: {numero_destino} → {numero_origen}", "PRUEBA")
                         time.sleep(2)
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Error al iniciar llamada: {e}")
+                        st.error(f" Error al iniciar llamada: {e}")
                 else:
-                    st.warning("⚠️ Ingresa números válidos con código de país (+57...)")
+                    st.warning(" Ingresa números válidos con código de país (+57...)")
         else:
             # Monitorear llamada de prueba
             try:
                 test_call = client.calls(st.session_state.test_call_sid).fetch()
-                st.info(f"📊 Estado: {test_call.status}")
+                st.info(f" Estado: {test_call.status}")
                 
                 if test_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
-                    st.success(f"✅ Llamada finalizada: {test_call.status}")
-                    if st.button("🔄 Nueva Prueba"):
+                    st.success(f" Llamada finalizada: {test_call.status}")
+                    if st.button(" Nueva Prueba"):
                         st.session_state.test_call_sid = None
                         st.rerun()
                 else:
-                    st.write("⏳ Llamada en curso...")
+                    st.write(" Llamada en curso...")
                     time.sleep(3)
                     st.rerun()
             except Exception as e:
@@ -539,12 +672,53 @@ with tab_op:
             }}
         }}
         
-        // La inicialización se hace desde el evento onload del script de Twilio
+        // Función para hacer llamadas WebRTC
+        function llamarWebRTC(numero) {{
+            if (!device) {{
+                alert('⚠️ WebRTC no está inicializado. Espera a que aparezca "Audio listo"');
+                return;
+            }}
+            
+            console.log('Iniciando llamada WebRTC a:', numero);
+            
+            try {{
+                const params = {{
+                    To: numero
+                }};
+                
+                currentConnection = device.connect(params);
+                
+                currentConnection.on('accept', function() {{
+                    console.log('Llamada conectada');
+                }});
+                
+                currentConnection.on('disconnect', function() {{
+                    console.log('Llamada finalizada');
+                    currentConnection = null;
+                }});
+                
+                currentConnection.on('error', function(error) {{
+                    console.error('Error en llamada:', error);
+                    alert('❌ Error: ' + error.message);
+                }});
+                
+            }} catch(error) {{
+                console.error('Error iniciando llamada:', error);
+                alert('❌ Error: ' + error.message);
+            }}
+        }}
+        
+        function colgarWebRTC() {{
+            if (currentConnection) {{
+                currentConnection.disconnect();
+            }}
+        }}
     </script>
     """
     
     import streamlit.components.v1 as components
     components.html(twilio_webrtc_component, height=50)
+
 with tab_op:
     if st.session_state.df_contactos is not None:
         search = st.text_input("🔍 Buscar Cliente:").lower()
@@ -623,7 +797,10 @@ with tab_op:
 
                     with col2:
                         if not st.session_state.en_pausa:
-                            if st.session_state.llamada_activa_sid is None:
+                            # Verificar si hay llamada activa (Conference o WebRTC)
+                            llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
+                            
+                            if not llamada_activa:
                                 # Botón único de llamada con Conference Call (ACTIVO)
                                 if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True, key=f"call_{idx}"):
                                     try:
@@ -633,7 +810,7 @@ with tab_op:
                                         # Paso 1: Llamar al agente primero
                                         print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
                                  
-                                        # Crear TwiML para la conferencia (SIN mensajes de voz)
+                                        # Crear TwiML para la conferencia con grabación y transcripción
                                         twiml_conference = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
                                             <Dial>
@@ -642,6 +819,9 @@ with tab_op:
                                                     endConferenceOnExit="true"
                                                     record="record-from-start"
                                                     recordingStatusCallback="{function_url}/recording-status"
+                                                    trim="trim-silence"
+                                                    transcribe="true"
+                                                    transcribeCallback="{function_url}/transcription-callback"
                                                     waitUrl=""
                                                     beep="false"
                                                 >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
@@ -686,12 +866,11 @@ with tab_op:
                                         import traceback
                                         print(traceback.format_exc())
                                 # ============================================================
-                                # BOTONES ALTERNATIVOS (COMENTADOS - DISPONIBLES SI SE NECESITAN)
+                                # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
                                 # ============================================================
-                                # Para activar estos botones, descomenta el código y comenta el botón Conference Call
                                 
-                                # --- OPCIÓN 1: Botón Server-Side (Llamada directa sin Conference) ---
-                                # if st.button("📞 LLAMAR (Server)", type="primary", use_container_width=True, key=f"call_server_{idx}"):
+                                # --- OPCIÓN 1: Botón Server-Side (COMENTADO - No sirve para audio bidireccional) ---
+                                # if st.button("📞 LLAMAR (Server)", use_container_width=True, key=f"call_server_{idx}"):
                                 #     try:
                                 #         call = client.calls.create(
                                 #             url=function_url, 
@@ -702,24 +881,38 @@ with tab_op:
                                 #         )
                                 #         st.session_state.llamada_activa_sid = call.sid
                                 #         st.session_state.t_inicio_dt = datetime.now()
-                                #         add_log(f"CALL_START: {c['nombre']}", "TWILIO")
+                                #         add_log(f"CALL_START_SERVER: {c['nombre']}", "TWILIO")
                                 #         st.rerun()
                                 #     except Exception as e:
                                 #         st.error(f"Error al iniciar llamada: {e}")
                                 
-                                # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) ---
-                                # st.markdown(f"""
-                                # <button onclick="llamarWebRTC('{tel}')" style="
-                                #     background: #00A86B;
-                                #     color: white;
-                                #     border: none;
-                                #     padding: 10px 20px;
-                                #     border-radius: 5px;
-                                #     cursor: pointer;
-                                #     font-size: 16px;
-                                #     width: 100%;
-                                # ">🎧 LLAMAR (WebRTC)</button>
-                                # """, unsafe_allow_html=True)
+                                # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
+                                if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
+                                    # Marcar WebRTC como activo
+                                    st.session_state.webrtc_activo = True
+                                    st.session_state.webrtc_numero = tel
+                                    st.session_state.webrtc_nombre = c['nombre']
+                                    st.session_state.t_inicio_dt = datetime.now()
+                                    add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
+                                    st.success("✅ Iniciando WebRTC - Permite el micrófono")
+                                    time.sleep(1)
+                                    st.rerun()
+                                
+                                # Mostrar botón HTML para iniciar llamada JavaScript
+                                if st.session_state.webrtc_activo and st.session_state.webrtc_numero == tel:
+                                    st.markdown(f"""
+                                    <button onclick="llamarWebRTC('{tel}')" style="
+                                        background: #FF6B6B;
+                                        color: white;
+                                        border: none;
+                                        padding: 10px 20px;
+                                        border-radius: 5px;
+                                        cursor: pointer;
+                                        font-size: 16px;
+                                        width: 100%;
+                                        margin-top: 10px;
+                                    ">📞 CONECTAR AUDIO</button>
+                                    """, unsafe_allow_html=True)
                                 # ============================================================
                                 
                                 # Opción de reprogramar
@@ -727,7 +920,7 @@ with tab_op:
                                 st.write("**📅 Reprogramar Llamada**")
                                 fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
                                 hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
-                                
+                                 
                                 if st.button("✅ Programar", key=f"prog_{idx}"):
                                     # Combinar fecha y hora
                                     fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
@@ -740,9 +933,125 @@ with tab_op:
                                     time.sleep(1)
                                     st.rerun()
                             else:
-                                # --- MONITOR DINÁMICO CON REFUERZO DE GUARDADO ---
+                                # --- MONITOR DINÁMICO ---
+                                
+                                # Verificar si es llamada WebRTC
+                                if st.session_state.webrtc_activo:
+                                    # Monitor para WebRTC
+                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                    minutos = tiempo_transcurrido // 60
+                                    segundos = tiempo_transcurrido % 60
+                                    st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                    st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
+                                    
+                                    # Buscar el SID de llamada WebRTC si no lo tenemos
+                                    if st.session_state.webrtc_call_sid is None:
+                                        try:
+                                            # Buscar llamadas activas al número del cliente
+                                            calls = client.calls.list(
+                                                to=tel,
+                                                status='in-progress',
+                                                limit=1
+                                            )
+                                            if calls:
+                                                st.session_state.webrtc_call_sid = calls[0].sid
+                                                print(f"[DEBUG] WebRTC Call SID encontrado: {calls[0].sid}")
+                                                st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
+                                        except Exception as e:
+                                            print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
+                                    
+                                    # Botones en columnas (similar a Conference Call)
+                                    btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                    
+                                    finalizar_webrtc = False
+                                    pausar_webrtc = False
+                                    
+                                    with btn_webrtc_col1:
+                                        finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary")
+                                    
+                                    with btn_webrtc_col2:
+                                        if not st.session_state.grabacion_pausada:
+                                            pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN")
+                                        else:
+                                            st.info("🔴 Grabación pausada")
+                                    
+                                    # Manejar pausa de grabación en WebRTC
+                                    if pausar_webrtc:
+                                        # Calcular duración hasta el momento
+                                        dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                        
+                                        # Pausar la grabación en Twilio si tenemos el SID
+                                        if st.session_state.webrtc_call_sid:
+                                            try:
+                                                recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
+                                                if recordings:
+                                                    client.recordings(recordings[0].sid).update(status='paused')
+                                                    st.success("⏸️ Grabación pausada en Twilio")
+                                            except Exception as e:
+                                                print(f"[ERROR] Error pausando grabación WebRTC: {e}")
+                                        
+                                        # Guardar en Sheet Informe con estado "Grabación Pausada"
+                                        if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.webrtc_call_sid or ''):
+                                            st.session_state.grabacion_pausada = True
+                                            add_log(f"WEBRTC_GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
+                                            st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                        else:
+                                            st.error("❌ Error guardando en Sheet Informe")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    
+                                    # Manejar finalización de WebRTC
+                                    if finalizar_webrtc:
+                                        # Guardar gestión
+                                        t_fin = datetime.now()
+                                        dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
+                                        
+                                        # Actualizar DataFrame local
+                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
+                                        st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                        st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
+                                        st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                        st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
+                                        
+                                        # Guardar en Sheet Informe
+                                        if guardar_en_sheet_informe(c, tel, "Llamado", nota, dur, ''):
+                                            st.success("✅ Guardado en Sheet Informe")
+                                        
+                                        add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
+                                        
+                                        # Limpiar estado WebRTC
+                                        st.session_state.webrtc_activo = False
+                                        st.session_state.webrtc_numero = None
+                                        st.session_state.webrtc_nombre = None
+                                        st.session_state.webrtc_call_sid = None
+                                        st.session_state.grabacion_pausada = False
+                                        
+                                        st.success("✅ Llamada WebRTC finalizada")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    
+                                    # Botón HTML para colgar desde JavaScript
+                                    st.markdown("""
+                                    <button onclick="colgarWebRTC()" style="
+                                        background: #FF4444;
+                                        color: white;
+                                        border: none;
+                                        padding: 10px 20px;
+                                        border-radius: 5px;
+                                        cursor: pointer;
+                                        font-size: 16px;
+                                        width: 100%;
+                                        margin-top: 10px;
+                                    ">📞 Colgar Audio</button>
+                                    """, unsafe_allow_html=True)
+                                    
+                                    # Auto-refresh para actualizar cronómetro
+                                    time.sleep(1)
+                                    st.rerun()
+                                
+                                # Monitor para Conference Call
                                 try:
-                                    print(f"[DEBUG] Iniciando monitoreo de llamada...")
+                                    print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
                                     # CRONÓMETRO EN TIEMPO REAL
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
@@ -757,11 +1066,30 @@ with tab_op:
                                     st.info(f"📞 Estado Twilio: {remote.status}")
                                     
                                     # 2. Definir condiciones de terminación
-                                    # 'no-answer', 'busy', 'failed', 'canceled' son terminaciones de "No contestó"
                                     call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                                     print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
                                     
-                                    # 3. Mostrar botones durante llamada activa
+                                    # 3. Detectar si contestó máquina y colgar automáticamente
+                                    answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
+                                    es_maquina = answered_by in ['machine_start', 'fax']
+                                    
+                                    # Colgar automáticamente si es máquina
+                                    if es_maquina and not call_ended_by_system:
+                                        st.warning(f"🤖 Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
+                                        try:
+                                            # Colgar la llamada automáticamente
+                                            client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                            print(f"[DEBUG] Llamada finalizada automáticamente por detección de máquina")
+                                            st.info("📞 Llamada finalizada automáticamente")
+                                            # Marcar como terminada por el sistema
+                                            call_ended_by_system = True
+                                            time.sleep(2)
+                                            st.rerun()
+                                        except Exception as e:
+                                            print(f"[ERROR] Error finalizando llamada automáticamente: {e}")
+                                            st.error(f"Error: {e}")
+                                    
+                                    # 4. Mostrar botones durante llamada activa
                                     finalizar_manual = False
                                     pausar_grabacion = False
                                     
@@ -779,14 +1107,22 @@ with tab_op:
                                         # Manejar pausa de grabación
                                         if pausar_grabacion:
                                             try:
-                                                # Pausar la grabación usando Twilio API
+                                                # Pausar la grabación en Twilio
                                                 recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
                                                 if recordings:
-                                                    # Pausar la grabación activa
                                                     client.recordings(recordings[0].sid).update(status='paused')
-                                                    st.session_state.grabacion_pausada = True
-                                                    add_log(f"GRABACION_PAUSADA: {c['nombre']}", "ACCION")
-                                                    st.success("✅ Grabación pausada")
+                                                    
+                                                    # Calcular duración hasta el momento
+                                                    dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                                    
+                                                    # Guardar en Sheet Informe con estado "Grabación Pausada"
+                                                    if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.llamada_activa_sid):
+                                                        st.session_state.grabacion_pausada = True
+                                                        add_log(f"GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
+                                                        st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                                    else:
+                                                        st.error("❌ Error guardando en Sheet Informe")
+                                                    
                                                     time.sleep(1)
                                                     st.rerun()
                                             except Exception as e:
@@ -938,10 +1274,11 @@ with tab_op:
                                         st.session_state.grabacion_pausada = False
                                         time.sleep(2)
                                         st.rerun()
-    
+                                    
                                     # Bucle de espera activa
                                     if not call_ended_by_system:
                                         st.write("⏳ Esperando respuesta del cliente...")
+                                        time.sleep(2)
                                         st.rerun()
                                 
                                 except Exception as e_monitor:
