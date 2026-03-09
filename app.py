@@ -627,36 +627,38 @@ with tab_op:
     </div>
     
     <script>
-    // Cargar SDK con manejo de errores mejorado
+    // Cargar SDK con múltiples opciones de CDN
     function loadTwilioSDK() {{
-        console.log('Iniciando carga de Twilio SDK...');
+        console.log('🚀 Iniciando carga de Twilio SDK...');
         
-        const script = document.createElement('script');
-        script.src = 'https://sdk.twilio.com/js/client/v2.11/twilio.min.js';
-        script.onload = function() {{
-            console.log('✅ Twilio SDK cargado exitosamente');
-            setTimeout(initTwilioDevice, 100);
-        }};
-        script.onerror = function() {{
-            console.error('❌ Error cargando Twilio SDK - URL principal');
-            // Intentar URL alternativa
-            loadAlternativeSDK();
-        }};
-        document.head.appendChild(script);
+        // Opción 1: unpkg CDN (más confiable)
+        loadSDKFromCDN('https://unpkg.com/twilio-client@2.11.0/dist/twilio.min.js', 'unpkg');
     }}
     
-    function loadAlternativeSDK() {{
-        console.log('Intentando URL alternativa del SDK...');
+    function loadSDKFromCDN(url, source) {{
+        console.log(`📦 Intentando SDK desde ${{source}}...`);
+        
         const script = document.createElement('script');
-        script.src = 'https://media.twiliocdn.com/sdk/js/client/v2.11/twilio.min.js';
+        script.src = url;
         script.onload = function() {{
-            console.log('✅ Twilio SDK (alternativo) cargado exitosamente');
+            console.log(`✅ Twilio SDK cargado exitosamente desde ${{source}}`);
             setTimeout(initTwilioDevice, 100);
         }};
         script.onerror = function() {{
-            console.error('❌ Error cargando SDK alternativo');
-            if (typeof window.updateStatus === 'function') {{
-                window.updateStatus('🔴 Error: No se pudo cargar el SDK de Twilio. Verifica tu conexión.');
+            console.error(`❌ Error cargando SDK desde ${{source}}`);
+            
+            // Intentar siguiente CDN
+            if (source === 'unpkg') {{
+                loadSDKFromCDN('https://cdn.jsdelivr.net/npm/twilio-client@2.11.0/dist/twilio.min.js', 'jsdelivr');
+            }} else if (source === 'jsdelivr') {{
+                loadSDKFromCDN('https://sdk.twilio.com/js/client/v2.11/twilio.min.js', 'twilio-official');
+            }} else if (source === 'twilio-official') {{
+                loadSDKFromCDN('https://media.twiliocdn.com/sdk/js/client/v2.11/twilio.min.js', 'twilio-media');
+            }} else {{
+                console.error('❌ Todos los CDN fallaron');
+                if (typeof window.updateStatus === 'function') {{
+                    window.updateStatus('🔴 Error: No se pudo cargar el SDK de Twilio. Intenta recargar la página.');
+                }}
             }}
         }};
         document.head.appendChild(script);
