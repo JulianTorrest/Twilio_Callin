@@ -43,13 +43,9 @@ try:
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
     gc = gspread.authorize(creds)
     
-    # Abrir Sheet de Informe (donde se guardan los resultados)
+    # Extraer IDs de los sheets (NO abrirlos todavía para evitar rate limit)
     sheet_id_informe = URL_SHEET_INFORME.split('/d/')[1].split('/')[0]
-    spreadsheet = gc.open_by_key(sheet_id_informe)
-    
-    # Abrir Sheet de Contactos (de donde se leen los contactos por agente)
     sheet_id_contactos = URL_SHEET_CONTACTOS.split('/d/')[1].split('/')[0]
-    spreadsheet_contactos = gc.open_by_key(sheet_id_contactos)
 except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
@@ -112,17 +108,35 @@ class RateLimiter:
         self.request_times = []
         self.warning_shown = False
 
-# Inicializar rate limiter global
+# Inicializar rate limiter global con límite más conservador
 if 'rate_limiter' not in st.session_state:
-    st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=50, warning_threshold=0.9)
+    st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=30, warning_threshold=0.8)
 
 rate_limiter = st.session_state.rate_limiter
+
+# --- FUNCIONES LAZY LOADING PARA SPREADSHEETS ---
+def get_spreadsheet_informe():
+    """Abre el spreadsheet de Informe con lazy loading y caché"""
+    if 'spreadsheet_informe' not in st.session_state:
+        rate_limiter.check_and_wait(operation_type="read")
+        st.session_state.spreadsheet_informe = gc.open_by_key(sheet_id_informe)
+        print(f"[DEBUG] Spreadsheet Informe abierto: {sheet_id_informe}")
+    return st.session_state.spreadsheet_informe
+
+def get_spreadsheet_contactos():
+    """Abre el spreadsheet de Contactos con lazy loading y caché"""
+    if 'spreadsheet_contactos' not in st.session_state:
+        rate_limiter.check_and_wait(operation_type="read")
+        st.session_state.spreadsheet_contactos = gc.open_by_key(sheet_id_contactos)
+        print(f"[DEBUG] Spreadsheet Contactos abierto: {sheet_id_contactos}")
+    return st.session_state.spreadsheet_contactos
 
 # --- 2. FUNCIONES HELPER PARA GOOGLE SHEETS ---
 def read_sheet(worksheet_name="0"):
     """Lee datos de Google Sheets usando gspread"""
     try:
         rate_limiter.check_and_wait(operation_type="read")
+        spreadsheet = get_spreadsheet_informe()
         worksheet = spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else spreadsheet.worksheet(worksheet_name)
         data = worksheet.get_all_values()
         if len(data) > 0:
@@ -147,10 +161,11 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         # Determinar qué spreadsheet usar
         if sheet_url:
             # Abrir el spreadsheet específico desde la URL
+            rate_limiter.check_and_wait(operation_type="read")
             target_spreadsheet = gc.open_by_url(sheet_url)
         else:
             # Usar el spreadsheet por defecto (Informe)
-            target_spreadsheet = spreadsheet
+            target_spreadsheet = get_spreadsheet_informe()
         
         # Obtener el worksheet
         worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
@@ -170,7 +185,9 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
 def cargar_contactos_agente(cedula_agente):
     """Carga contactos desde Google Sheets filtrados por cedula_agente"""
     try:
-        # Leer todos los contactos del Sheet
+        # Leer todos los contactos del Sheet con rate limiting
+        rate_limiter.check_and_wait(operation_type="read")
+        spreadsheet_contactos = get_spreadsheet_contactos()
         worksheet = spreadsheet_contactos.get_worksheet(0)
         data = worksheet.get_all_values()
         
@@ -347,7 +364,7 @@ if 'agente_id' not in st.session_state:
                 numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
                 
                 if not numero_celular:
-                    st.error(f" No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
+                    st.error(f"⚠️ No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
                     st.stop()
                 
                 st.session_state.agente_id = ced
@@ -383,17 +400,17 @@ if 'webrtc_call_sid' not in st.session_state: st.session_state.webrtc_call_sid =
 with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
     if st.session_state.numero_celular_agente:
-        st.caption(f"Celular: {st.session_state.numero_celular_agente}")
+        st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
     
     if not st.session_state.en_pausa:
-        if st.button("Iniciar Pausa"):
+        if st.button("☕ Iniciar Pausa"):
             st.session_state.en_pausa = True
             st.session_state.pausa_inicio = datetime.now()
             add_log("INICIO_PAUSA", "ESTADO")
             st.rerun()
     else:
         st.warning("EN PAUSA")
-        if st.button("Volver"):
+        if st.button("✅ Volver"):
             st.session_state.en_pausa = False
             add_log("FIN_PAUSA", "ESTADO")
             st.rerun()
@@ -405,9 +422,9 @@ with st.sidebar:
             st.session_state.df_contactos = cargar_contactos_agente(st.session_state.agente_id)
             if not st.session_state.df_contactos.empty:
                 add_log(f"CONTACTOS_RECARGADOS: {len(st.session_state.df_contactos)} contactos", "DATA")
-                st.success(f"{len(st.session_state.df_contactos)} contactos cargados")
+                st.success(f"✅ {len(st.session_state.df_contactos)} contactos cargados")
             else:
-                st.warning("No hay contactos asignados a tu cédula")
+                st.warning("⚠️ No hay contactos asignados a tu cédula")
             time.sleep(1)
             st.rerun()
 
@@ -418,13 +435,13 @@ with st.sidebar:
     # Botón para guardar logs
     if st.button("💾 Guardar Logs"):
         if guardar_logs_en_drive():
-            st.success("Logs guardados en Drive")
+            st.success("✅ Logs guardados en Drive")
         else:
-            st.error("Error guardando logs")
+            st.error("❌ Error guardando logs")
     
     if st.button("Cerrar Sesión"):
         # Guardar logs deshabilitado para evitar quota de Drive
-        # Si necesitas guardar logs, usa el botón "Guardar Logs" antes de cerrar sesión
+        # Si necesitas guardar logs, usa el botón "💾 Guardar Logs" antes de cerrar sesión
         add_log("LOGOUT", "AUTH")
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
@@ -443,10 +460,10 @@ if st.session_state.df_contactos is not None:
     total_programadas = len(df[df['estado'] == 'Programada'])
     total_llamados = len(df[df['estado'] == 'Llamado'])
     
-    col1.metric(" Pendientes", total_pendientes)
-    col2.metric(" No Contestaron", total_no_contestaron)
-    col3.metric(" Programadas", total_programadas)
-    col4.metric(" Llamados", total_llamados)
+    col1.metric("⏳ Pendientes", total_pendientes)
+    col2.metric("📵 No Contestaron", total_no_contestaron)
+    col3.metric("📅 Programadas", total_programadas)
+    col4.metric("✅ Llamados", total_llamados)
     
     # Barras de progreso
     st.divider()
@@ -486,7 +503,7 @@ try:
 except:
     df_historico = pd.DataFrame()
 
-tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs([" Operación", " Mis Métricas", " Supervisor", " Auditoría", " Pruebas"])
+tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
 
 with tab_met:
     st.subheader("Rendimiento del Agente")
@@ -523,15 +540,15 @@ with tab_aud:
 
 # --- TAB DE PRUEBAS ---
 with tab_pruebas:
-    st.subheader(" Módulo de Pruebas de Llamadas")
+    st.subheader("🧪 Módulo de Pruebas de Llamadas")
     st.write("Prueba la calidad de las llamadas con Click-to-Call")
     
     col_test1, col_test2 = st.columns(2)
     
     with col_test1:
         st.write("**Configuración de Llamada de Prueba**")
-        numero_destino = st.text_input(" Número Destino (a quién llamar):", value="+57", key="test_destino")
-        numero_origen = st.text_input(" Número Origen (tu número):", value="+57", key="test_origen")
+        numero_destino = st.text_input("📱 Número Destino (a quién llamar):", value="+57", key="test_destino")
+        numero_origen = st.text_input("📞 Número Origen (tu número):", value="+57", key="test_origen")
         
         st.info("""**Cómo funciona:**
         1. Twilio llama primero al **Número Destino**
@@ -547,7 +564,7 @@ with tab_pruebas:
             st.session_state.test_call_sid = None
         
         if st.session_state.test_call_sid is None:
-            if st.button(" INICIAR LLAMADA DE PRUEBA", type="primary"):
+            if st.button("🚀 INICIAR LLAMADA DE PRUEBA", type="primary"):
                 if len(numero_destino) > 5 and len(numero_origen) > 5:
                     try:
                         # Crear TwiML que conecta las dos llamadas
@@ -569,28 +586,28 @@ with tab_pruebas:
                         )
                         
                         st.session_state.test_call_sid = call.sid
-                        st.success(f"✅Llamada iniciada: {call.sid}")
-                        st.info(f" Llamando a {numero_destino}...")
+                        st.success(f"✅ Llamada iniciada: {call.sid}")
+                        st.info(f"📞 Llamando a {numero_destino}...")
                         add_log(f"TEST_CALL: {numero_destino} → {numero_origen}", "PRUEBA")
                         time.sleep(2)
                         st.rerun()
                     except Exception as e:
-                        st.error(f" Error al iniciar llamada: {e}")
+                        st.error(f"❌ Error al iniciar llamada: {e}")
                 else:
-                    st.warning(" Ingresa números válidos con código de país (+57...)")
+                    st.warning("⚠️ Ingresa números válidos con código de país (+57...)")
         else:
             # Monitorear llamada de prueba
             try:
                 test_call = client.calls(st.session_state.test_call_sid).fetch()
-                st.info(f" Estado: {test_call.status}")
+                st.info(f"📊 Estado: {test_call.status}")
                 
                 if test_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
-                    st.success(f" Llamada finalizada: {test_call.status}")
-                    if st.button(" Nueva Prueba"):
+                    st.success(f"✅ Llamada finalizada: {test_call.status}")
+                    if st.button("🔄 Nueva Prueba"):
                         st.session_state.test_call_sid = None
                         st.rerun()
                 else:
-                    st.write(" Llamada en curso...")
+                    st.write("⏳ Llamada en curso...")
                     time.sleep(3)
                     st.rerun()
             except Exception as e:
