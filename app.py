@@ -935,9 +935,12 @@ with tab_op:
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
-                                        # Guardar el SID de la llamada del cliente (para tracking)
+                                        # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
+                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                         st.session_state.llamada_activa_sid = call_cliente.sid
+                                        st.session_state.conference_name = conference_name
                                         st.session_state.t_inicio_dt = datetime.now()
+                                        print(f"[DEBUG] Conference creada: {conference_name}")
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
                                         st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
@@ -1037,23 +1040,54 @@ with tab_op:
                                     if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
                                         call_ended_by_remote = True
                                         
-                                        # Obtener answered_by para clasificar correctamente
+                                        # Obtener datos de la llamada para clasificación
                                         answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
                                         duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
-                                        print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s")
+                                        error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
+                                        print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
                                         
-                                        # CLASIFICACIÓN AUTOMÁTICA DE ESTADOS
-                                        # Caso 1: Celular apagado, ocupado, falló o cancelado
-                                        if remote_call.status in ['no-answer', 'busy', 'failed', 'canceled']:
+                                        # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
+                                        
+                                        # PRIORIDAD ALTA 1: Número inválido/inexistente
+                                        if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.error(f"❌ Número inválido o inexistente (error {error_code})")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
+                                        
+                                        # PRIORIDAD MEDIA 1: Número bloqueado/spam
+                                        elif remote_call.status == 'failed' and error_code in ['21610', '30006']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado: {error_code}")
+                                        
+                                        # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
+                                        elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
+                                        
+                                        # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
+                                        elif remote_call.status in ['no-answer', 'busy', 'canceled']:
                                             webrtc_final_status = 'No Contesto'
                                             st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
                                             print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
                                         
-                                        # Caso 2: Contestó máquina o fax
-                                        elif answered_by in ['machine_start', 'fax']:
+                                        # Caso 2: Fallo genérico
+                                        elif remote_call.status == 'failed':
                                             webrtc_final_status = 'No Contesto'
-                                            st.warning(f"⚠️ Contestó máquina/buzón: {answered_by}")
-                                            print(f"[DEBUG] Clasificado como No Contesto por máquina/buzón")
+                                            st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
+                                        
+                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado
+                                        elif answered_by in ['machine_start', 'fax']:
+                                            if duracion_twilio < 5:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno")
+                                            else:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz")
                                         
                                         # Caso 3: Contestó una persona (humano)
                                         elif answered_by == 'human':
@@ -1061,19 +1095,26 @@ with tab_op:
                                             st.success(f"✅ Llamada contestada por persona")
                                             print(f"[DEBUG] Clasificado como Llamado por humano")
                                         
-                                        # Caso 4: Completó pero no sabemos quién contestó - usar duración
+                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
                                         elif remote_call.status == 'completed' and answered_by == 'unknown':
-                                            # Si la duración es muy corta (<10s), probablemente no contestó o colgó inmediatamente
-                                            if duracion_twilio < 10:
+                                            if duracion_twilio == 0:
                                                 webrtc_final_status = 'No Contesto'
-                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó o rechazó")
+                                                st.warning(f"⚠️ Llamada sin conexión (0s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Sin conexión")
+                                            elif 0 < duracion_twilio < 3:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Rechazó inmediatamente: {duracion_twilio}s")
+                                            elif 3 <= duracion_twilio < 10:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
                                                 print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
                                             else:
                                                 webrtc_final_status = 'Llamado'
                                                 st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
                                                 print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
                                         
-                                        # Caso 5: Cualquier otro caso completado
+                                        # Caso por defecto
                                         else:
                                             webrtc_final_status = 'Llamado'
                                             st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
@@ -1099,7 +1140,7 @@ with tab_op:
                                             else:
                                                 st.info("🔴 Grabación pausada")
                                     else:
-                                        # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                        # Si la llamada terminó, marcar para finalizar automáticamente
                                         finalizar_webrtc = True
                                     
                                     # Manejar pausa de grabación en WebRTC
@@ -1277,12 +1318,66 @@ with tab_op:
                                     call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                                     print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
                                     
-                                    # 3. Detectar si contestó máquina y colgar automáticamente
+                                    # 3. Detectar casos especiales y colgar automáticamente
                                     answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
                                     es_maquina = answered_by in ['machine_start', 'fax']
                                     
+                                    # PRIORIDAD MEDIA 3: Timeout de conferencia INTELIGENTE (>60s con 1 solo participante)
+                                    if not call_ended_by_system and tiempo_transcurrido > 60 and remote.status == 'in-progress':
+                                        try:
+                                            # Verificar cuántos participantes hay en la conferencia
+                                            conference_name = st.session_state.get('conference_name', None)
+                                            num_participantes = 0
+                                            
+                                            if conference_name:
+                                                # Buscar la conferencia por nombre
+                                                conferences = client.conferences.list(friendly_name=conference_name, status='in-progress', limit=1)
+                                                
+                                                if conferences:
+                                                    conference_sid = conferences[0].sid
+                                                    # Contar participantes activos
+                                                    participants = client.conferences(conference_sid).participants.list()
+                                                    num_participantes = len([p for p in participants if p.status in ['connected', 'in-progress']])
+                                                    print(f"[DEBUG] Conference {conference_name}: {num_participantes} participantes activos")
+                                                    
+                                                    # Solo colgar si hay 1 solo participante (agente o cliente esperando solo)
+                                                    if num_participantes == 1:
+                                                        st.warning(f"⏱️ Timeout: Solo 1 participante después de {tiempo_transcurrido}s - Finalizando...")
+                                                        client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                        print(f"[DEBUG] Llamada finalizada automáticamente - 1 participante solo")
+                                                        call_ended_by_system = True
+                                                        time.sleep(2)
+                                                        st.rerun()
+                                                    elif num_participantes >= 2:
+                                                        # Ambos están en la llamada - NO colgar
+                                                        print(f"[DEBUG] Conference activa con {num_participantes} participantes - NO timeout")
+                                                    else:
+                                                        # 0 participantes - conferencia vacía
+                                                        st.warning(f"⚠️ Conferencia vacía - Finalizando...")
+                                                        client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                        call_ended_by_system = True
+                                                        time.sleep(2)
+                                                        st.rerun()
+                                                else:
+                                                    print(f"[DEBUG] No se encontró conferencia activa: {conference_name}")
+                                            else:
+                                                print(f"[DEBUG] No hay conference_name en session_state")
+                                                
+                                        except Exception as e:
+                                            print(f"[ERROR] Error verificando participantes de conferencia: {e}")
+                                            # Si hay error, aplicar timeout simple como fallback
+                                            st.warning(f"⏱️ Timeout de conferencia ({tiempo_transcurrido}s) - Finalizando...")
+                                            try:
+                                                client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                call_ended_by_system = True
+                                                time.sleep(2)
+                                                st.rerun()
+                                            except Exception as e2:
+                                                print(f"[ERROR] Error finalizando por timeout: {e2}")
+                                                st.error(f"Error: {e2}")
+                                    
                                     # Colgar automáticamente si es máquina
-                                    if es_maquina and not call_ended_by_system:
+                                    elif es_maquina and not call_ended_by_system:
                                         st.warning(f"🤖 Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
                                         try:
                                             # Colgar la llamada automáticamente
@@ -1343,27 +1438,74 @@ with tab_op:
                                     if finalizar_manual or call_ended_by_system:
                                         print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
                                         
-                                        # Obtener answered_by para detectar si contestó una persona o máquina
+                                        # Obtener datos de la llamada para clasificación
                                         answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
-                                        print(f"[DEBUG] answered_by: {answered_by}, status: {remote.status}")
+                                        duracion_twilio = int(remote.duration) if remote.duration else 0
+                                        error_code = str(remote.error_code) if hasattr(remote, 'error_code') and remote.error_code else None
+                                        print(f"[DEBUG] Conference - answered_by: {answered_by}, status: {remote.status}, duration: {duracion_twilio}s, error_code: {error_code}")
                                         
-                                        # Determinar estado basado en answered_by y status
-                                        final_status = 'Llamado'
+                                        # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS (igual que WebRTC)
                                         
-                                        if remote.status in ['no-answer', 'busy', 'failed', 'canceled']:
+                                        # PRIORIDAD ALTA 1: Número inválido/inexistente
+                                        if remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
                                             final_status = 'No Contesto'
-                                        elif answered_by in ['machine_start', 'fax', 'unknown']:
+                                            print(f"[DEBUG] Conference - Número inválido: {error_code}")
+                                        
+                                        # PRIORIDAD MEDIA 1: Número bloqueado/spam
+                                        elif remote.status == 'failed' and error_code in ['21610', '30006']:
                                             final_status = 'No Contesto'
-                                            print(f"[DEBUG] Detectado como máquina/buzón: {answered_by}")
+                                            print(f"[DEBUG] Conference - Número bloqueado: {error_code}")
+                                        
+                                        # PRIORIDAD MEDIA 2: Error de red
+                                        elif remote.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Conference - Error de red: {error_code}")
+                                        
+                                        # Caso 1: No contestó, ocupado, cancelado
+                                        elif remote.status in ['no-answer', 'busy', 'canceled']:
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Conference - No contestó: {remote.status}")
+                                        
+                                        # Caso 2: Fallo genérico
+                                        elif remote.status == 'failed':
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Conference - Fallo genérico: {error_code}")
+                                        
+                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado
+                                        elif answered_by in ['machine_start', 'fax']:
+                                            if duracion_twilio < 5:
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Conference - Buzón lleno")
+                                            else:
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Conference - Buzón de voz")
+                                        
+                                        # Caso 3: Contestó persona
                                         elif answered_by == 'human':
                                             final_status = 'Llamado'
-                                            print(f"[DEBUG] Detectado como humano")
-                                        else:
-                                            if remote.status == 'completed' and answered_by == 'unknown':
-                                                final_status = 'No Contesto'
-                                                print(f"[DEBUG] Status completed pero answered_by unknown - marcando como No Contesto")
+                                            print(f"[DEBUG] Conference - Detectado como humano")
                                         
-                                        print(f"[DEBUG] Estado final determinado: {final_status}")
+                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
+                                        elif remote.status == 'completed' and answered_by == 'unknown':
+                                            if duracion_twilio == 0:
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Conference - Sin conexión")
+                                            elif 0 < duracion_twilio < 3:
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Conference - Rechazó inmediatamente: {duracion_twilio}s")
+                                            elif 3 <= duracion_twilio < 10:
+                                                final_status = 'No Contesto'
+                                                print(f"[DEBUG] Conference - Duración muy corta: {duracion_twilio}s")
+                                            else:
+                                                final_status = 'Llamado'
+                                                print(f"[DEBUG] Conference - Conversación establecida: {duracion_twilio}s")
+                                        
+                                        # Caso por defecto
+                                        else:
+                                            final_status = 'Llamado'
+                                            print(f"[DEBUG] Conference - Clasificado como Llamado por defecto")
+                                        
+                                        print(f"[DEBUG] ✅ Conference - Estado final determinado: {final_status}")
                                         
                                         # Calculamos duración
                                         t_fin = datetime.now()
@@ -1479,6 +1621,7 @@ with tab_op:
                                         print(f"[DEBUG] Limpiando estado de llamada")
                                         st.write("✅ Gestión completada - Pasando al siguiente contacto...")
                                         st.session_state.llamada_activa_sid = None
+                                        st.session_state.conference_name = None
                                         st.session_state.grabacion_pausada = False
                                         time.sleep(2)
                                         st.rerun()
