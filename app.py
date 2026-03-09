@@ -1123,25 +1123,25 @@ with tab_op:
                                         print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
                                 except Exception as e:
                                     print(f"[ERROR] Error verificando estado WebRTC: {e}")
+                                
+                                # Botones en columnas (SIEMPRE mostrar durante llamada activa)
+                                finalizar_webrtc = False
+                                pausar_webrtc = False
+                                
+                                if not call_ended_by_remote:
+                                    btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
                                     
-                                    # Botones en columnas (similar a Conference Call)
-                                    finalizar_webrtc = False
-                                    pausar_webrtc = False
+                                    with btn_webrtc_col1:
+                                        finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
                                     
-                                    if not call_ended_by_remote:
-                                        btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
-                                        
-                                        with btn_webrtc_col1:
-                                            finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
-                                        
-                                        with btn_webrtc_col2:
-                                            if not st.session_state.grabacion_pausada:
-                                                pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
-                                            else:
-                                                st.info("🔴 Grabación pausada")
-                                    else:
-                                        # Si la llamada terminó, marcar para finalizar automáticamente
-                                        finalizar_webrtc = True
+                                    with btn_webrtc_col2:
+                                        if not st.session_state.grabacion_pausada:
+                                            pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
+                                        else:
+                                            st.info("🔴 Grabación pausada")
+                                else:
+                                    # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                    finalizar_webrtc = True
                                     
                                     # Manejar pausa de grabación en WebRTC
                                     if pausar_webrtc:
