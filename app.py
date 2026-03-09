@@ -1068,10 +1068,13 @@ with tab_op:
                                             )
                                             if calls:
                                                 st.session_state.webrtc_call_sid = calls[0].sid
+                                                # Actualizar el tiempo de inicio cuando la llamada realmente se conecta
+                                                st.session_state.t_inicio_dt = datetime.now()
                                                 print(f"[DEBUG] WebRTC Call SID encontrado: {calls[0].sid}")
                                                 st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
                                         except Exception as e:
                                             print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
+                                    
                                     # Verificar si la llamada sigue activa en Twilio
                                     call_ended_by_remote = False
                                     webrtc_final_status = 'Llamado'  # Por defecto
@@ -1184,9 +1187,9 @@ with tab_op:
                                                 pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
                                             else:
                                                 st.info("🔴 Grabación pausada")
-                                else:
-                                    # Si la llamada terminó remotamente, marcar para finalizar automáticamente
-                                    finalizar_webrtc = True
+                                    else:
+                                        # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                        finalizar_webrtc = True
                                     
                                     # Manejar pausa de grabación en WebRTC
                                     if pausar_webrtc:
@@ -1406,9 +1409,8 @@ with tab_op:
                                         st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
                                         time.sleep(2)
                                         st.rerun()
-                                    
-                                    # Auto-refresh para actualizar cronómetro (solo si la llamada sigue activa)
-                                    if not finalizar_webrtc and not call_ended_by_remote:
+                                    else:
+                                        # Auto-refresh para actualizar cronómetro y detectar cambios de estado
                                         time.sleep(1)
                                         st.rerun()
 
