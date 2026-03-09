@@ -1024,6 +1024,7 @@ with tab_op:
                                     st.session_state.webrtc_activo = True
                                     st.session_state.webrtc_numero = tel
                                     st.session_state.webrtc_nombre = c['nombre']
+                                    st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
                                     st.session_state.t_inicio_dt = datetime.now()
                                     add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
                                     st.rerun()
@@ -1048,8 +1049,8 @@ with tab_op:
                             else:
                                 # --- MONITOR DINÁMICO ---
                                 
-                                # Verificar si es llamada WebRTC
-                                if st.session_state.webrtc_activo:
+                                # Verificar si es llamada WebRTC Y si este es el contacto activo
+                                if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
                                     # Monitor para WebRTC
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
@@ -1265,7 +1266,7 @@ with tab_op:
                                                         precio_llamada = str(call_data.price) if call_data.price else '0'
                                                         duracion_facturada = str(call_data.duration) if call_data.duration else '0'
                                                         estado_respuesta = str(call_data.answered_by) if call_data.answered_by else 'unknown'
-                                                        codigo_error = str(call_data.error_code) if call_data.error_code else ''
+                                                        codigo_error = str(call_data.error_code) if hasattr(call_data, 'error_code') and call_data.error_code else ''
                                                         
                                                         # Datos adicionales de Twilio Call Recording
                                                         account_sid = str(call_data.account_sid) if hasattr(call_data, 'account_sid') else ''
@@ -1412,6 +1413,7 @@ with tab_op:
                                         st.session_state.webrtc_numero = None
                                         st.session_state.webrtc_nombre = None
                                         st.session_state.webrtc_call_sid = None
+                                        st.session_state.webrtc_idx = None
                                         st.session_state.grabacion_pausada = False
                                         
                                         st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
