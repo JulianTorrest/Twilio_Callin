@@ -1029,39 +1029,6 @@ with tab_op:
                                     st.session_state.t_inicio_dt = datetime.now()
                                     add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
                                     st.rerun()
-                                
-                                # Opción de reprogramar
-                                st.divider()
-                                st.write("**📅 Reprogramar Llamada**")
-                                fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
-                                hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
-                                 
-                                if st.button("✅ Programar", key=f"prog_{idx}"):
-                                    # Combinar fecha y hora
-                                    fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
-                                    
-                                    # Actualizar DataFrame local
-                                    st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
-                                    st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
-                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota
-                                    st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                                    
-                                    # Actualizar Sheet Llamadas
-                                    if URL_SHEET_CONTACTOS:
-                                        try:
-                                            if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
-                                                add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                                                st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
-                                            else:
-                                                st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
-                                        except Exception as e:
-                                            st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
-                                            print(f"[ERROR] Programar llamada - Update Sheet: {e}")
-                                    else:
-                                        st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
-                                    
-                                    time.sleep(1)
-                                    st.rerun()
                             else:
                                 # --- MONITOR DINÁMICO ---
                                 
@@ -1804,6 +1771,39 @@ with tab_op:
                                     print(f"[ERROR] Traceback:\n{error_trace}")
                                     st.error(f"Error monitoreando llamada: {e_monitor}")
                                     st.code(error_trace)
+                            
+                            # --- OPCIÓN DE REPROGRAMAR (SIEMPRE DISPONIBLE) ---
+                            st.divider()
+                            st.write("**📅 Reprogramar Llamada**")
+                            fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
+                            hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
+                             
+                            if st.button("✅ Programar", key=f"prog_{idx}"):
+                                # Combinar fecha y hora
+                                fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                                
+                                # Actualizar DataFrame local
+                                st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
+                                st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
+                                st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                
+                                # Actualizar Sheet Llamadas
+                                if URL_SHEET_CONTACTOS:
+                                    try:
+                                        if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                            add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                        else:
+                                            st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
+                                    except Exception as e:
+                                        st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
+                                        print(f"[ERROR] Programar llamada - Update Sheet: {e}")
+                                else:
+                                    st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                
+                                time.sleep(1)
+                                st.rerun()
         else:
             st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
     else:
