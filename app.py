@@ -651,7 +651,9 @@ with tab_op:
                 statusEl.innerHTML = '🟡 Conectando con Twilio...';
                 
                 // Obtener token
-                const response = await fetch('https://mis-metricas-voz-5007.twil.io/token?identity={st.session_state.agente_id}');
+                const tokenUrl = `{function_url}/token?identity={st.session_state.agente_id}`;
+                console.log('🔍 URL del token:', tokenUrl);
+                const response = await fetch(tokenUrl);
                 if (!response.ok) throw new Error('Error obteniendo token');
                 
                 const data = await response.json();
