@@ -1201,19 +1201,61 @@ with tab_op:
                                                 codigo_error = ''
                                                 
                                                 try:
-                                                    recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
-                                                    if recordings:
-                                                        url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                                    # Obtener TODOS los datos de la llamada de Twilio
+                                                    if st.session_state.webrtc_call_sid:
+                                                        call_data = client.calls(st.session_state.webrtc_call_sid).fetch()
+                                                        
+                                                        # Datos básicos
+                                                        precio_llamada = str(call_data.price) if call_data.price else '0'
+                                                        duracion_facturada = str(call_data.duration) if call_data.duration else '0'
+                                                        estado_respuesta = str(call_data.answered_by) if call_data.answered_by else 'unknown'
+                                                        codigo_error = str(call_data.error_code) if call_data.error_code else ''
+                                                        
+                                                        # Datos adicionales de Twilio Call Recording
+                                                        account_sid = str(call_data.account_sid) if hasattr(call_data, 'account_sid') else ''
+                                                        start_time = str(call_data.start_time) if hasattr(call_data, 'start_time') and call_data.start_time else ''
+                                                        end_time = str(call_data.end_time) if hasattr(call_data, 'end_time') and call_data.end_time else ''
+                                                        from_number = str(call_data.from_) if hasattr(call_data, 'from_') else ''
+                                                        to_number = str(call_data.to) if hasattr(call_data, 'to') else ''
+                                                        direction = str(call_data.direction) if hasattr(call_data, 'direction') else ''
+                                                        status = str(call_data.status) if hasattr(call_data, 'status') else ''
+                                                        price_unit = str(call_data.price_unit) if hasattr(call_data, 'price_unit') else 'USD'
+                                                        call_type = 'client' if from_number.startswith('client:') else 'phone'
+                                                        date_created = str(call_data.date_created) if hasattr(call_data, 'date_created') and call_data.date_created else ''
+                                                        parent_call_sid = str(call_data.parent_call_sid) if hasattr(call_data, 'parent_call_sid') and call_data.parent_call_sid else ''
+                                                        phone_number_sid = str(call_data.phone_number_sid) if hasattr(call_data, 'phone_number_sid') and call_data.phone_number_sid else ''
+                                                        
+                                                        print(f"[DEBUG] Datos de llamada obtenidos: duration={duracion_facturada}s, answered_by={estado_respuesta}, from={from_number}, to={to_number}")
                                                     
-                                                    precio_llamada = str(remote_call.price) if remote_call.price else '0'
-                                                    duracion_facturada = str(remote_call.duration) if remote_call.duration else '0'
-                                                    estado_respuesta = str(remote_call.answered_by) if remote_call.answered_by else ''
-                                                    codigo_error = str(remote_call.error_code) if remote_call.error_code else ''
+                                                    # Esperar 5 segundos para que la grabación esté disponible
+                                                    st.write("⏳ Esperando grabación (5s)...")
+                                                    time.sleep(5)
+                                                    
+                                                    # Intentar obtener la grabación con retry (máximo 3 intentos)
+                                                    max_intentos = 3
+                                                    for intento in range(max_intentos):
+                                                        recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
+                                                        if recordings:
+                                                            url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                                            print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
+                                                            st.success(f"🎙️ Grabación disponible")
+                                                            break
+                                                        else:
+                                                            print(f"[DEBUG] Intento {intento + 1}/{max_intentos}: Grabación no disponible aún")
+                                                            if intento < max_intentos - 1:
+                                                                st.write(f"⏳ Reintentando obtener grabación ({intento + 2}/{max_intentos})...")
+                                                                time.sleep(3)
+                                                            else:
+                                                                st.warning("⚠️ Grabación no disponible aún - Se guardará sin URL")
+                                                                print(f"[WARNING] Grabación no encontrada después de {max_intentos} intentos")
+                                                    
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
-                                                
-                                                # Preparar fila para Sheet Informe
+                                                    st.warning(f"⚠️ Error obteniendo datos de Twilio: {e_twilio}")
+                                                 
+                                                # Preparar fila para Sheet Informe con TODAS las columnas de Twilio
                                                 fila_informe = pd.DataFrame({
+                                                    # Columnas del sistema
                                                     'agente_id': [st.session_state.agente_id],
                                                     'nombre': [c['nombre']],
                                                     'telefono': [tel],
@@ -1221,12 +1263,26 @@ with tab_op:
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                                    'sid_llamada': [st.session_state.webrtc_call_sid or ''],
-                                                    'url_grabacion': [url_grabacion],
-                                                    'precio_llamada': [precio_llamada],
-                                                    'duracion_facturada': [duracion_facturada],
-                                                    'estado_respuesta': [estado_respuesta],
-                                                    'codigo_error': [codigo_error]
+                                                    
+                                                    # Columnas de Twilio Call Recording
+                                                    'call_sid': [st.session_state.webrtc_call_sid or ''],
+                                                    'account_sid': [account_sid if 'account_sid' in locals() else ''],
+                                                    'start_time': [start_time if 'start_time' in locals() else ''],
+                                                    'end_time': [end_time if 'end_time' in locals() else ''],
+                                                    'duration': [duracion_facturada],
+                                                    'from': [from_number if 'from_number' in locals() else ''],
+                                                    'to': [to_number if 'to_number' in locals() else tel],
+                                                    'direction': [direction if 'direction' in locals() else ''],
+                                                    'status': [status if 'status' in locals() else ''],
+                                                    'price': [precio_llamada],
+                                                    'price_unit': [price_unit if 'price_unit' in locals() else 'USD'],
+                                                    'answered_by': [estado_respuesta],
+                                                    'type': [call_type if 'call_type' in locals() else ''],
+                                                    'date_created': [date_created if 'date_created' in locals() else ''],
+                                                    'parent_call_sid': [parent_call_sid if 'parent_call_sid' in locals() else ''],
+                                                    'phone_number_sid': [phone_number_sid if 'phone_number_sid' in locals() else ''],
+                                                    'error_code': [codigo_error],
+                                                    'url_grabacion': [url_grabacion]
                                                 })
                                                 
                                                 # Leer Sheet Informe actual (con caché para evitar rate limit)
@@ -1269,8 +1325,8 @@ with tab_op:
                                             try:
                                                 st.write("🔄 Actualizando estado en Sheet Llamadas...")
                                                 
-                                                # Actualizar el DataFrame completo y escribirlo de vuelta
-                                                if update_sheet(st.session_state.df_contactos, "1"):
+                                                # Actualizar el DataFrame completo y escribirlo de vuelta al Sheet CORRECTO
+                                                if update_sheet(st.session_state.df_contactos, "1", sheet_url=URL_SHEET_CONTACTOS):
                                                     st.success("✅ Estado actualizado en Sheet Llamadas")
                                                     add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
