@@ -1072,119 +1072,118 @@ with tab_op:
                                                 st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
                                         except Exception as e:
                                             print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
-                                    
                                     # Verificar si la llamada sigue activa en Twilio
                                     call_ended_by_remote = False
                                     webrtc_final_status = 'Llamado'  # Por defecto
                                     
-                            if st.session_state.webrtc_call_sid:
-                                try:
-                                    remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
-                                    print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
+                                    if st.session_state.webrtc_call_sid:
+                                        try:
+                                            remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
+                                            print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
                                             
-                                    # Si la llamada terminó, determinar el estado final
-                                    if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
-                                        call_ended_by_remote = True
-                                        
-                                        # Obtener datos de la llamada para clasificación
-                                        answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
-                                        duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
-                                        error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
-                                        print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
-                                        
-                                        # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
-                                        
-                                        # PRIORIDAD ALTA 1: Número inválido/inexistente
-                                        if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
-                                            webrtc_final_status = 'No Contesto'
-                                            st.error(f"❌ Número inválido o inexistente (error {error_code})")
-                                            print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
-                                        
-                                        # PRIORIDAD MEDIA 1: Número bloqueado/spam
-                                        elif remote_call.status == 'failed' and error_code in ['21610', '30006']:
-                                            webrtc_final_status = 'No Contesto'
-                                            st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
-                                            print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado: {error_code}")
-                                        
-                                        # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
-                                        elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
-                                            webrtc_final_status = 'No Contesto'
-                                            st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
-                                            print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
-                                        
-                                        # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
-                                        elif remote_call.status in ['no-answer', 'busy', 'canceled']:
-                                            webrtc_final_status = 'No Contesto'
-                                            st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
-                                            print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
-                                        
-                                        # Caso 2: Fallo genérico
-                                        elif remote_call.status == 'failed':
-                                            webrtc_final_status = 'No Contesto'
-                                            st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
-                                            print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
-                                        
-                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado
-                                        elif answered_by in ['machine_start', 'fax']:
-                                            if duracion_twilio < 5:
-                                                webrtc_final_status = 'No Contesto'
-                                                st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s)")
-                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno")
-                                            else:
-                                                webrtc_final_status = 'No Contesto'
-                                                st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s)")
-                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz")
-                                        
-                                        # Caso 3: Contestó una persona (humano)
-                                        elif answered_by == 'human':
-                                            webrtc_final_status = 'Llamado'
-                                            st.success(f"✅ Llamada contestada por persona")
-                                            print(f"[DEBUG] Clasificado como Llamado por humano")
-                                        
-                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
-                                        elif remote_call.status == 'completed' and answered_by == 'unknown':
-                                            if duracion_twilio == 0:
-                                                webrtc_final_status = 'No Contesto'
-                                                st.warning(f"⚠️ Llamada sin conexión (0s)")
-                                                print(f"[DEBUG] Clasificado como No Contesto - Sin conexión")
-                                            elif 0 < duracion_twilio < 3:
-                                                webrtc_final_status = 'No Contesto'
-                                                st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
-                                                print(f"[DEBUG] Clasificado como No Contesto - Rechazó inmediatamente: {duracion_twilio}s")
-                                            elif 3 <= duracion_twilio < 10:
-                                                webrtc_final_status = 'No Contesto'
-                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
-                                                print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
-                                            else:
-                                                webrtc_final_status = 'Llamado'
-                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
-                                                print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
-                                        
-                                        # Caso por defecto
-                                        else:
-                                            webrtc_final_status = 'Llamado'
-                                            st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
-                                            print(f"[DEBUG] Clasificado como Llamado por defecto")
-                                        
-                                        print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
-                                except Exception as e:
-                                    print(f"[ERROR] Error verificando estado WebRTC: {e}")
-                                
-                                # Botones en columnas (SIEMPRE mostrar durante llamada activa)
-                                finalizar_webrtc = False
-                                pausar_webrtc = False
-                                
-                                if not call_ended_by_remote:
-                                    btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                            # Si la llamada terminó, determinar el estado final
+                                            if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
+                                                call_ended_by_remote = True
+                                                
+                                                # Obtener datos de la llamada para clasificación
+                                                answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
+                                                duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
+                                                error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
+                                                print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
+                                                
+                                                # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
+                                                
+                                                # PRIORIDAD ALTA 1: Número inválido/inexistente
+                                                if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
+                                                    webrtc_final_status = 'No Contesto'
+                                                    st.error(f"❌ Número inválido o inexistente (error {error_code})")
+                                                    print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
+                                                
+                                                # PRIORIDAD MEDIA 1: Número bloqueado/spam
+                                                elif remote_call.status == 'failed' and error_code in ['21610', '30006']:
+                                                    webrtc_final_status = 'No Contesto'
+                                                    st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
+                                                    print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado: {error_code}")
+                                                
+                                                # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
+                                                elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
+                                                    webrtc_final_status = 'No Contesto'
+                                                    st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
+                                                    print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
+                                                
+                                                # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
+                                                elif remote_call.status in ['no-answer', 'busy', 'canceled']:
+                                                    webrtc_final_status = 'No Contesto'
+                                                    st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
+                                                    print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
+                                                
+                                                # Caso 2: Fallo genérico
+                                                elif remote_call.status == 'failed':
+                                                    webrtc_final_status = 'No Contesto'
+                                                    st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
+                                                    print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
+                                                
+                                                # PRIORIDAD ALTA 3: Buzón de voz mejorado
+                                                elif answered_by in ['machine_start', 'fax']:
+                                                    if duracion_twilio < 5:
+                                                        webrtc_final_status = 'No Contesto'
+                                                        st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s)")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno")
+                                                    else:
+                                                        webrtc_final_status = 'No Contesto'
+                                                        st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s)")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz")
+                                                
+                                                # Caso 3: Contestó una persona (humano)
+                                                elif answered_by == 'human':
+                                                    webrtc_final_status = 'Llamado'
+                                                    st.success(f"✅ Llamada contestada por persona")
+                                                    print(f"[DEBUG] Clasificado como Llamado por humano")
+                                                
+                                                # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
+                                                elif remote_call.status == 'completed' and answered_by == 'unknown':
+                                                    if duracion_twilio == 0:
+                                                        webrtc_final_status = 'No Contesto'
+                                                        st.warning(f"⚠️ Llamada sin conexión (0s)")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Sin conexión")
+                                                    elif 0 < duracion_twilio < 3:
+                                                        webrtc_final_status = 'No Contesto'
+                                                        st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Rechazó inmediatamente: {duracion_twilio}s")
+                                                    elif 3 <= duracion_twilio < 10:
+                                                        webrtc_final_status = 'No Contesto'
+                                                        st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
+                                                        print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
+                                                    else:
+                                                        webrtc_final_status = 'Llamado'
+                                                        st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
+                                                        print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
+                                                
+                                                # Caso por defecto
+                                                else:
+                                                    webrtc_final_status = 'Llamado'
+                                                    st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
+                                                    print(f"[DEBUG] Clasificado como Llamado por defecto")
+                                                
+                                                print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
+                                        except Exception as e:
+                                            print(f"[ERROR] Error verificando estado WebRTC: {e}")
                                     
-                                    with btn_webrtc_col1:
-                                        finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
+                                    # Botones en columnas (SIEMPRE mostrar durante llamada activa)
+                                    finalizar_webrtc = False
+                                    pausar_webrtc = False
                                     
-                                    with btn_webrtc_col2:
-                                        if not st.session_state.grabacion_pausada:
-                                            pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
-                                        else:
-                                            st.info("🔴 Grabación pausada")
+                                    if not call_ended_by_remote:
+                                        btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                        
+                                        with btn_webrtc_col1:
+                                            finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
+                                        
+                                        with btn_webrtc_col2:
+                                            if not st.session_state.grabacion_pausada:
+                                                pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
+                                            else:
+                                                st.info("🔴 Grabación pausada")
                                 else:
                                     # Si la llamada terminó remotamente, marcar para finalizar automáticamente
                                     finalizar_webrtc = True
