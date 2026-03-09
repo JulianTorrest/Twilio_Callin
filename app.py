@@ -738,11 +738,14 @@ with tab_op:
             console.log('📞 Iniciando llamada WebRTC a:', numero);
             
             try {{
+                // Usar params en lugar de To para enviar parámetros personalizados
                 const params = {{
-                    To: numero
+                    params: {{
+                        phoneNumber: numero
+                    }}
                 }};
                 
-                // En SDK v2.x, device.connect() retorna una Promise
+                console.log('🔍 Parámetros enviados:', JSON.stringify(params));
                 currentConnection = await device.connect(params);
                 console.log('✅ Conexión establecida:', currentConnection);
                 
@@ -752,8 +755,19 @@ with tab_op:
                 }});
                 
                 currentConnection.on('disconnect', function() {{
-                    console.log('📴 Llamada finalizada');
+                    console.log('📴 Llamada finalizada - Limpiando estado automáticamente');
                     currentConnection = null;
+                    
+                    // Notificar a Streamlit que la llamada terminó
+                    // Esto limpiará el estado webrtc_activo automáticamente
+                    setTimeout(function() {{
+                        if (window.parent && window.parent.postMessage) {{
+                            window.parent.postMessage({{
+                                type: 'webrtc_disconnect',
+                                timestamp: new Date().toISOString()
+                            }}, '*');
+                        }}
+                    }}, 100);
                 }});
                 
                 currentConnection.on('error', function(error) {{
