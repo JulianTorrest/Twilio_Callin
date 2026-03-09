@@ -279,12 +279,25 @@ def solicitar_transcripcion(recording_sid):
         str: SID de la transcripción si fue exitosa, None en caso contrario
     """
     try:
-        print(f"[DEBUG] Solicitando transcripción para recording: {recording_sid}")
+        print(f"[DEBUG] 🎤 Solicitando transcripción para recording: {recording_sid}")
+        
+        # Primero verificar si la grabación existe
+        recording = client.recordings(recording_sid).fetch()
+        print(f"[DEBUG] 📼 Grabación encontrada - Status: {recording.status}, Duration: {recording.duration}s")
+        
+        # Intentar crear transcripción
         transcription = client.transcriptions.create(recording_sid=recording_sid)
-        print(f"[DEBUG] ✅ Transcripción solicitada: {transcription.sid}")
+        print(f"[DEBUG] ✅ Transcripción solicitada exitosamente: {transcription.sid}")
+        print(f"[DEBUG] 📝 Transcripción Status: {transcription.status}")
         return transcription.sid
     except Exception as e:
-        print(f"[ERROR] Error solicitando transcripción: {e}")
+        print(f"[ERROR] ❌ Error solicitando transcripción: {e}")
+        import traceback
+        print(f"[ERROR] Traceback completo: {traceback.format_exc()}")
+        
+        # Verificar si es un error de configuración
+        if "transcription" in str(e).lower():
+            print(f"[ERROR] ⚠️ Posible error de configuración de transcripción en Twilio")
         return None
 
 def guardar_en_sheet_informe(contacto, telefono, estado, nota, duracion_seg, sid_llamada=''):
@@ -1381,13 +1394,26 @@ with tab_op:
                                                             print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
                                                             st.success(f"🎙️ Grabación disponible")
                                                             
-                                                            # Solicitar transcripción automáticamente
-                                                            st.write("📝 Solicitando transcripción...")
-                                                            transcription_sid = solicitar_transcripcion(recording_sid)
-                                                            if transcription_sid:
-                                                                st.success(f"✅ Transcripción solicitada (SID: {transcription_sid[:8]}...)")
-                                                            else:
-                                                                st.warning("⚠️ No se pudo solicitar transcripción")
+                                                            # La transcripción se genera automáticamente desde TwiML (PCI Mode compatible)
+                                                            st.write("📝 Transcripción automática habilitada (PCI Mode)")
+                                                            print(f"[DEBUG] 🎤 Transcripción automática desde TwiML para {recording_sid}")
+                                                            
+                                                            # Esperar un momento para que se genere la transcripción
+                                                            time.sleep(2)
+                                                            
+                                                            # Intentar obtener la transcripción si ya existe
+                                                            try:
+                                                                transcriptions = client.transcriptions.list(recording_sid=recording_sid, limit=1)
+                                                                if transcriptions:
+                                                                    transcription_sid = transcriptions[0].sid
+                                                                    st.success(f"✅ Transcripción encontrada: {transcription_sid[:8]}...")
+                                                                    print(f"[DEBUG] ✅ Transcripción encontrada: {transcription_sid}")
+                                                                else:
+                                                                    st.info("📝 Transcripción en proceso...")
+                                                                    print(f"[DEBUG] 📝 Transcripción aún no disponible (se procesará en background)")
+                                                            except Exception as e_trans:
+                                                                print(f"[DEBUG] Transcripción aún no disponible: {e_trans}")
+                                                                st.info("📝 Transcripción se procesará en background")
                                                             
                                                             break
                                                         else:
