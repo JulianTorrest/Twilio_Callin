@@ -1024,20 +1024,38 @@ with tab_op:
                                         except Exception as e:
                                             print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
                                     
-                                    # Botones en columnas (similar a Conference Call)
-                                    btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                    # Verificar si la llamada sigue activa en Twilio
+                                    call_ended_by_remote = False
+                                    if st.session_state.webrtc_call_sid:
+                                        try:
+                                            remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
+                                            print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
+                                            
+                                            # Si la llamada terminó (usuario colgó), limpiar estado
+                                            if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
+                                                call_ended_by_remote = True
+                                                st.warning(f"⚠️ Llamada terminada por el usuario: {remote_call.status}")
+                                        except Exception as e:
+                                            print(f"[ERROR] Error verificando estado WebRTC: {e}")
                                     
+                                    # Botones en columnas (similar a Conference Call)
                                     finalizar_webrtc = False
                                     pausar_webrtc = False
                                     
-                                    with btn_webrtc_col1:
-                                        finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary")
-                                    
-                                    with btn_webrtc_col2:
-                                        if not st.session_state.grabacion_pausada:
-                                            pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN")
-                                        else:
-                                            st.info("🔴 Grabación pausada")
+                                    if not call_ended_by_remote:
+                                        btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                        
+                                        with btn_webrtc_col1:
+                                            finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
+                                        
+                                        with btn_webrtc_col2:
+                                            if not st.session_state.grabacion_pausada:
+                                                pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
+                                            else:
+                                                st.info("🔴 Grabación pausada")
+                                    else:
+                                        # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                        finalizar_webrtc = True
                                     
                                     # Manejar pausa de grabación en WebRTC
                                     if pausar_webrtc:
@@ -1061,32 +1079,103 @@ with tab_op:
                                             st.success("✅ Grabación pausada y guardada en Sheet Informe")
                                         else:
                                             st.error("❌ Error guardando en Sheet Informe")
+                                        
                                         time.sleep(1)
                                         st.rerun()
                                     
-                                    # Manejar finalización de WebRTC
-                                    if finalizar_webrtc:
+                                    # Manejar finalización de WebRTC (manual o automática)
+                                    if finalizar_webrtc or call_ended_by_remote:
                                         # Guardar gestión
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
-                                        print(f"[DEBUG] WebRTC - Actualizando DataFrame local para idx={idx}")
+                                        print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
                                         st.session_state.df_contactos.at[idx, 'estado'] = 'Llamado'
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
-                                        print(f"[DEBUG] WebRTC - DataFrame local actualizado")
+                                        print(f"[DEBUG] DataFrame local actualizado. Estado: Llamado")
                                         
-                                        # --- PASO 2: GUARDAR EN SHEET INFORME ---
-                                        st.write("💾 Guardando gestión WebRTC...")
-                                        if guardar_en_sheet_informe(c, tel, "Llamado", nota, dur, st.session_state.webrtc_call_sid or ''):
-                                            st.success("✅ Guardado en Sheet Informe")
-                                            add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - Llamado", "DATA")
-                                        else:
-                                            st.warning("⚠️ Error guardando en Sheet Informe")
+                                        # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
+                                        print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
+                                        st.write(f"💾 Guardando gestión: Llamado")
+                                        
+                                        if URL_SHEET_INFORME:
+                                            try:
+                                                st.write("🔄 Sincronizando con Sheet Informe...")
+                                                
+                                                # Obtener información adicional de Twilio
+                                                url_grabacion = ''
+                                                precio_llamada = '0'
+                                                duracion_facturada = '0'
+                                                estado_respuesta = ''
+                                                codigo_error = ''
+                                                
+                                                try:
+                                                    recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
+                                                    if recordings:
+                                                        url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                                    
+                                                    precio_llamada = str(remote_call.price) if remote_call.price else '0'
+                                                    duracion_facturada = str(remote_call.duration) if remote_call.duration else '0'
+                                                    estado_respuesta = str(remote_call.answered_by) if remote_call.answered_by else ''
+                                                    codigo_error = str(remote_call.error_code) if remote_call.error_code else ''
+                                                except Exception as e_twilio:
+                                                    print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
+                                                
+                                                # Preparar fila para Sheet Informe
+                                                fila_informe = pd.DataFrame({
+                                                    'agente_id': [st.session_state.agente_id],
+                                                    'nombre': [c['nombre']],
+                                                    'telefono': [tel],
+                                                    'estado': ['Llamado'],
+                                                    'observacion': [nota],
+                                                    'duracion_seg': [dur],
+                                                    'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
+                                                    'sid_llamada': [st.session_state.webrtc_call_sid or ''],
+                                                    'url_grabacion': [url_grabacion],
+                                                    'precio_llamada': [precio_llamada],
+                                                    'duracion_facturada': [duracion_facturada],
+                                                    'estado_respuesta': [estado_respuesta],
+                                                    'codigo_error': [codigo_error]
+                                                })
+                                                
+                                                # Leer Sheet Informe actual (con caché para evitar rate limit)
+                                                try:
+                                                    # Usar caché de session_state para evitar múltiples lecturas
+                                                    if 'df_informe_cache' not in st.session_state or st.session_state.get('informe_cache_time', 0) < time.time() - 30:
+                                                        # Actualizar caché cada 30 segundos
+                                                        df_informe_actual = read_sheet("0")
+                                                        st.session_state.df_informe_cache = df_informe_actual
+                                                        st.session_state.informe_cache_time = time.time()
+                                                        print(f"[DEBUG] Caché de Informe actualizado: {len(df_informe_actual)} registros")
+                                                    else:
+                                                        df_informe_actual = st.session_state.df_informe_cache
+                                                        print(f"[DEBUG] Usando caché de Informe: {len(df_informe_actual)} registros")
+                                                    
+                                                    st.write(f"📊 Registros en Informe: {len(df_informe_actual)}")
+                                                except Exception as e_read:
+                                                    print(f"[ERROR] Error leyendo Informe: {e_read}")
+                                                    df_informe_actual = pd.DataFrame()
+                                                
+                                                # Agregar nuevo registro
+                                                if df_informe_actual.empty:
+                                                    df_informe_actualizado = fila_informe.copy()
+                                                else:
+                                                    df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
+                                                
+                                                # Guardar en Sheet Informe
+                                                if update_sheet(df_informe_actualizado, "0"):
+                                                    st.success(f"✅ Guardado en Sheet Informe: Llamado")
+                                                    add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - Llamado", "DATA")
+                                                else:
+                                                    st.warning("⚠️ Error guardando en Sheet Informe")
+                                                    
+                                            except Exception as e_informe:
+                                                st.error(f"❌ Error en Sheet Informe: {e_informe}")
                                         
                                         # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
                                         print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
@@ -1118,9 +1207,10 @@ with tab_op:
                                         time.sleep(2)
                                         st.rerun()
                                     
-                                    # Auto-refresh para actualizar cronómetro
-                                    time.sleep(1)
-                                    st.rerun()
+                                    # Auto-refresh para actualizar cronómetro (solo si la llamada sigue activa)
+                                    if not finalizar_webrtc and not call_ended_by_remote:
+                                        time.sleep(1)
+                                        st.rerun()
 
                                 # Monitor para Conference Call
                                 try:
