@@ -688,12 +688,11 @@ with tab_op:
                 const data = await response.json();
                 console.log('✅ Token obtenido exitosamente');
                 
-                // Crear Device con SDK v2.x
+                // Crear Device con SDK v1.15.1
                 updateStatus('🟡 Configurando dispositivo...');
                 device = new Twilio.Device(data.token, {{
-                    codecPreferences: [Twilio.Device.CodecName.Opus, Twilio.Device.CodecName.PCMU],
-                    logLevel: 1,
-                    edge: 'ashburn'
+                    codecPreferences: ['opus', 'pcmu'],
+                    debug: true
                 }});
                 
                 // Event listeners
