@@ -7,6 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 import time
 import urllib.parse
 import plotly.express as px
+import re
+import threading
+import hashlib
 
 # --- CONFIGURACION DE PAGINA ---
 st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
@@ -51,6 +54,261 @@ try:
 except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
+
+# --- SISTEMA DE SANITIZACIÓN Y SEGURIDAD ---
+def sanitizar_nota(nota):
+    """Sanitiza notas para prevenir inyección y contenido malicioso
+    
+    Args:
+        nota: Texto de la nota a sanitizar
+        
+    Returns:
+        str: Nota sanitizada y segura
+    """
+    if not nota or pd.isna(nota):
+        return ""
+    
+    # Convertir a string si no lo es
+    nota = str(nota)
+    
+    # Eliminar caracteres peligrosos para inyección
+    nota = re.sub(r'[<>"\']', '', nota)
+    
+    # Eliminar scripts y patrones peligrosos
+    nota = re.sub(r'(?i)script', '', nota)
+    nota = re.sub(r'(?i)javascript:', '', nota)
+    nota = re.sub(r'(?i)on\w+\s*=', '', nota)
+    
+    # Limitar longitud máxima (1000 caracteres)
+    nota = nota[:1000] if len(nota) > 1000 else nota
+    
+    # Eliminar espacios excesivos
+    nota = re.sub(r'\s+', ' ', nota).strip()
+    
+    return nota
+
+def sanitizar_telefono(telefono):
+    """Sanitiza números de teléfono
+    
+    Args:
+        telefono: Número de teléfono a sanitizar
+        
+    Returns:
+        str: Teléfono sanitizado
+    """
+    if not telefono or pd.isna(telefono):
+        return ""
+    
+    # Mantener solo dígitos y signos +
+    telefono = re.sub(r'[^\d+]', '', str(telefono))
+    
+    # Validar formato básico
+    if telefono.startswith('+'):
+        # Formato internacional: + seguido de 9-15 dígitos
+        if re.match(r'^\+\d{9,15}$', telefono):
+            return telefono
+    else:
+        # Formato nacional: 7-15 dígitos
+        if re.match(r'^\d{7,15}$', telefono):
+            return telefono
+    
+    return ""
+
+def sanitizar_nombre(nombre):
+    """Sanitiza nombres de contactos
+    
+    Args:
+        nombre: Nombre a sanitizar
+        
+    Returns:
+        str: Nombre sanitizado
+    """
+    if not nombre or pd.isna(nombre):
+        return ""
+    
+    nombre = str(nombre)
+    
+    # Eliminar caracteres peligrosos pero permitir letras, números, espacios y caracteres comunes
+    nombre = re.sub(r'[<>"\']', '', nombre)
+    
+    # Limitar longitud (100 caracteres)
+    nombre = nombre[:100] if len(nombre) > 100 else nombre
+    
+    # Eliminar espacios excesivos
+    nombre = re.sub(r'\s+', ' ', nombre).strip()
+    
+    return nombre
+
+# --- SISTEMA DE CONTROL DE CONCURRENCIA PARA SHEETS ---
+class SheetConcurrencyManager:
+    """Maneja concurrencia para evitar conflictos de escritura en Google Sheets"""
+    
+    def __init__(self):
+        self.locks = {}  # Locks por sheet
+        self.last_operations = {}  # Últimas operaciones por agente
+        self.operation_hashes = {}  # Hashes de operaciones para detectar duplicados
+    
+    def get_lock_key(self, sheet_url, worksheet_name):
+        """Genera una clave única para el lock"""
+        import hashlib
+        key = f"{sheet_url}_{worksheet_name}"
+        return hashlib.md5(key.encode()).hexdigest()
+    
+    def acquire_lock(self, sheet_url, worksheet_name, agente_id, timeout=10):
+        """Adquiere un lock para escribir en un sheet específico
+        
+        Args:
+            sheet_url: URL del Google Sheet
+            worksheet_name: Nombre del worksheet
+            agente_id: ID del agente que solicita el lock
+            timeout: Tiempo máximo de espera en segundos
+            
+        Returns:
+            bool: True si obtuvo el lock, False si no pudo obtenerlo
+        """
+        lock_key = self.get_lock_key(sheet_url, worksheet_name)
+        
+        if lock_key not in self.locks:
+            self.locks[lock_key] = threading.Lock()
+        
+        lock = self.locks[lock_key]
+        
+        try:
+            # Intentar adquirir el lock con timeout
+            acquired = lock.acquire(timeout=timeout)
+            if acquired:
+                self.last_operations[lock_key] = {
+                    'agente_id': agente_id,
+                    'timestamp': time.time()
+                }
+                print(f"[CONCURRENCY] Lock adquirido por {agente_id} para {worksheet_name}")
+            return acquired
+        except Exception as e:
+            print(f"[CONCURRENCY] Error adquiriendo lock: {e}")
+            return False
+    
+    def release_lock(self, sheet_url, worksheet_name):
+        """Libera un lock de escritura
+        
+        Args:
+            sheet_url: URL del Google Sheet
+            worksheet_name: Nombre del worksheet
+        """
+        lock_key = self.get_lock_key(sheet_url, worksheet_name)
+        
+        if lock_key in self.locks:
+            lock = self.locks[lock_key]
+            if lock.locked():
+                lock.release()
+                print(f"[CONCURRENCY] Lock liberado para {worksheet_name}")
+            
+            # Limpiar información antigua
+            if lock_key in self.last_operations:
+                del self.last_operations[lock_key]
+    
+    def is_operation_duplicate(self, sheet_url, worksheet_name, data_hash):
+        """Verifica si una operación es duplicada
+        
+        Args:
+            sheet_url: URL del Google Sheet
+            worksheet_name: Nombre del worksheet
+            data_hash: Hash de los datos a escribir
+            
+        Returns:
+            bool: True si es duplicado, False si es nueva
+        """
+        key = f"{sheet_url}_{worksheet_name}"
+        
+        if key in self.operation_hashes:
+            last_hash, last_time = self.operation_hashes[key]
+            if last_hash == data_hash and (time.time() - last_time) < 5:  # 5 segundos de gracia
+                return True
+        
+        # Registrar esta operación
+        self.operation_hashes[key] = (data_hash, time.time())
+        return False
+
+# Instancia global del manejador de concurrencia
+if 'concurrency_manager' not in st.session_state:
+    st.session_state.concurrency_manager = SheetConcurrencyManager()
+
+# --- FUNCIÓN DE ACTUALIZACIÓN SEGURA CON CONCURRENCIA ---
+def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
+    """Actualiza Google Sheets con control de concurrencia y sanitización
+    
+    Args:
+        df: DataFrame a escribir
+        worksheet_name: Nombre o índice del worksheet
+        sheet_url: URL del Google Sheet (opcional)
+        agente_id: ID del agente que realiza la operación
+        
+    Returns:
+        bool: True si exitoso, False si falló
+    """
+    try:
+        # Sanitizar datos antes de escribir
+        df_sanitizado = df.copy()
+        
+        # Sanitizar columnas de texto
+        if 'nombre' in df_sanitizado.columns:
+            df_sanitizado['nombre'] = df_sanitizado['nombre'].apply(sanitizar_nombre)
+        
+        if 'observacion' in df_sanitizado.columns:
+            df_sanitizado['observacion'] = df_sanitizado['observacion'].apply(sanitizar_nota)
+        
+        if 'telefono' in df_sanitizado.columns:
+            df_sanitizado['telefono'] = df_sanitizado['telefono'].apply(sanitizar_telefono)
+        
+        # Generar hash de los datos para detectar duplicados
+        data_hash = hashlib.md5(str(df_sanitizado.values.tolist()).encode()).hexdigest()
+        
+        # Determinar sheet URL
+        target_url = sheet_url or URL_SHEET_INFORME
+        
+        # Verificar si es operación duplicada
+        concurrency_manager = st.session_state.concurrency_manager
+        if concurrency_manager.is_operation_duplicate(target_url, worksheet_name, data_hash):
+            print(f"[CONCURRENCY] Operación duplicada detectada, omitiendo escritura")
+            return True
+        
+        # Adquirir lock de concurrencia
+        agente_id = agente_id or st.session_state.get('agente_id', 'unknown')
+        if not concurrency_manager.acquire_lock(target_url, worksheet_name, agente_id):
+            print(f"[CONCURRENCY] No se pudo adquirir lock para {worksheet_name}")
+            return False
+        
+        try:
+            # Realizar la actualización con rate limiting
+            rate_limiter.check_and_wait(operation_type="write")
+            
+            # Determinar qué spreadsheet usar
+            if sheet_url:
+                rate_limiter.check_and_wait(operation_type="read")
+                target_spreadsheet = gc.open_by_url(sheet_url)
+            else:
+                target_spreadsheet = get_spreadsheet_informe()
+            
+            # Obtener worksheet
+            worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
+            
+            # Limpiar y actualizar
+            rate_limiter.check_and_wait(operation_type="write")
+            worksheet.clear()
+            rate_limiter.check_and_wait(operation_type="write")
+            worksheet.update([df_sanitizado.columns.values.tolist()] + df_sanitizado.values.tolist())
+            
+            print(f"[SECURITY] Sheet actualizado exitosamente por {agente_id}")
+            return True
+            
+        finally:
+            # Siempre liberar el lock
+            concurrency_manager.release_lock(target_url, worksheet_name)
+            
+    except Exception as e:
+        print(f"[SECURITY] Error actualizando sheet seguro: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return False
 
 # --- SISTEMA DE RATE LIMITING PARA GOOGLE SHEETS API ---
 class RateLimiter:
@@ -470,11 +728,12 @@ def verificar_autoguardado():
     if st.session_state.cambios_pendientes and (ahora - st.session_state.ultimo_autoguardado) > 30:
         if URL_SHEET_CONTACTOS and st.session_state.df_contactos is not None:
             try:
-                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                # Usar la función segura con concurrencia y sanitización
+                if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.get('agente_id', 'auto_guardado')):
                     st.session_state.ultimo_autoguardado = ahora
                     st.session_state.cambios_pendientes = False
-                    print("[AUTOGUARDADO] ✅ Cambios guardados automáticamente")
-                    add_log("AUTO_GUARDADO: Cambios sincronizados", "SISTEMA")
+                    print("[AUTOGUARDADO] ✅ Cambios guardados automáticamente con seguridad")
+                    add_log("AUTO_GUARDADO: Cambios sincronizados con seguridad", "SISTEMA")
                 else:
                     print("[AUTOGUARDADO] ⚠️ Error guardando cambios, se reintentará en 30s")
             except Exception as e:
@@ -1005,7 +1264,11 @@ with tab_op:
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
         
         # Filtrado riguroso
-        df_work = df[df['estado'] == f_est]
+        if "Gestionadas" in opc:
+            # Para "Gestionadas": mostrar contactos que contestaron la llamada (solo 'Llamado')
+            df_work = df[df['estado'] == 'Llamado']
+        else:
+            df_work = df[df['estado'] == f_est]
         if search:
             # Buscar en nombre o en teléfono (sin código de país, ej: 300xxxxxxx)
             df_work = df_work[
@@ -2052,12 +2315,12 @@ with tab_op:
                                 # Actualizar DataFrame local con notas acumuladas
                                 st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
                                 
-                                # Actualizar Sheet Llamadas
+                                # Actualizar Sheet Llamadas con función segura
                                 if URL_SHEET_CONTACTOS:
                                     try:
-                                        if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                        if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
                                             add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
-                                            st.success("✅ Notas acumuladas en Sheet Llamadas")
+                                            st.success("✅ Notas acumuladas en Sheet Llamadas con seguridad")
                                         else:
                                             st.warning("⚠️ Notas acumuladas localmente, pero error actualizando Sheet Llamadas")
                                     except Exception as e:
@@ -2084,12 +2347,12 @@ with tab_op:
                                 st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual  # Mantener notas acumuladas
                                 st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                 
-                                # Actualizar Sheet Llamadas
+                                # Actualizar Sheet Llamadas con función segura
                                 if URL_SHEET_CONTACTOS:
                                     try:
-                                        if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                        if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
                                             add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} con seguridad")
                                         else:
                                             st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
                                     except Exception as e:
