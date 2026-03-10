@@ -14,7 +14,7 @@ from pytz import timezone
 import pytz
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
+st.set_page_config(page_title="Gestión de Llamadas Camacol", layout="wide")
 
 st.markdown("""
     <style>
