@@ -38,7 +38,8 @@ try:
     URL_SHEET_INFORME = st.secrets.get("GSHEET_URL")
     URL_SHEET_CONTACTOS = st.secrets.get("GSHEET_CONTACTOS_URL")
     GDRIVE_LOGS_FOLDER_ID = st.secrets.get("GDRIVE_LOGS_FOLDER_ID")
-    CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678"]
+    #CEDULAS_AUTORIZADAS = ["1121871773", "87654321", "12345678","52486921"]
+    CEDULAS_AUTORIZADAS = st.secrets.get("CEDULAS_AUTORIZADAS", ["1121871773", "87654321", "12345678","52486921"])
     
     # Mapeo de números celulares de agentes para Hybrid Click-to-Call
     NUMEROS_CELULAR_AGENTES = dict(st.secrets.get("numeros_celular_agentes", {}))
