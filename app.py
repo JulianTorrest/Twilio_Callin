@@ -914,7 +914,9 @@ def calcular_metricas_productividad(df_contactos, df_informe=None):
     # Duración promedio (si hay informe)
     duracion_promedio = 0
     if df_informe is not None and not df_informe.empty:
-        duraciones = df_informe[df_informe['duracion_seg'].notna()]['duracion_seg']
+        # Convertir a numérico con manejo de errores
+        duraciones_numericas = pd.to_numeric(df_informe['duracion_seg'], errors='coerce')
+        duraciones = duraciones_numericas[duraciones_numericas.notna()]
         if not duraciones.empty:
             duracion_promedio = duraciones.mean()
     
