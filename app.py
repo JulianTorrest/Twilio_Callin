@@ -3115,38 +3115,57 @@ with tab_op:
                                         # Caso 1: No contestó, ocupado, cancelado
                                         elif remote.status in ['no-answer', 'busy', 'canceled']:
                                             final_status = 'No Contesto'
-                                            print(f"[DEBUG] Conference - No contestó: {remote.status}")
+                                            
+                                            # MENSAJES VISUALES ESPECÍFICOS
+                                            if remote.status == 'no-answer':
+                                                st.warning(f"📞 **No Contestó** - El usuario no respondió la llamada")
+                                                print(f"[DEBUG] Conference - No contestó: {remote.status}")
+                                            elif remote.status == 'busy':
+                                                st.error(f"📞 **Ocupado** - La línea del usuario estaba ocupada")
+                                                print(f"[DEBUG] Conference - Ocupado: {remote.status}")
+                                            elif remote.status == 'canceled':
+                                                st.info(f"📞 **Cancelado** - La llamada fue cancelada")
+                                                print(f"[DEBUG] Conference - Cancelado: {remote.status}")
+                                                
                                         # Caso 2: Fallo genérico
                                         elif remote.status == 'failed':
                                             final_status = 'No Contesto'
+                                            st.error(f"📞 **Fallo Técnico** - La llamada falló (error: {error_code or 'desconocido'})")
                                             print(f"[DEBUG] Conference - Fallo genérico: {error_code}")
                                         # PRIORIDAD ALTA 3: Buzón de voz mejorado
                                         elif answered_by in ['machine_start', 'fax']:
+                                            final_status = 'No Contesto'
+                                            
+                                            # 🎯 MENSAJES VISUALES ESPECÍFICOS PARA BUZÓN
                                             if duracion_twilio < 5:
-                                                final_status = 'No Contesto'
+                                                st.error(f"📞 **Buzón Lleno** - El buzón de voz está lleno o no dejó mensaje ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Buzón lleno")
                                             else:
-                                                final_status = 'No Contesto'
+                                                st.warning(f"📞 **Contestó Buzón** - El usuario no está disponible ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Buzón de voz")
                                         
                                         # Caso 3: Contestó persona
                                         elif answered_by == 'human':
                                             final_status = 'Llamado'
                                             print(f"[DEBUG] Conference - Detectado como humano")
-                                        
+                                            
                                         # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
                                         elif remote.status == 'completed' and answered_by == 'unknown':
                                             if duracion_twilio == 0:
                                                 final_status = 'No Contesto'
+                                                st.error(f"📞 **Sin Conexión** - No se estableció comunicación (0s)")
                                                 print(f"[DEBUG] Conference - Sin conexión")
                                             elif 0 < duracion_twilio < 3:
                                                 final_status = 'No Contesto'
+                                                st.warning(f"📞 **Rechazó Llamada** - Colgó inmediatamente ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Rechazó inmediatamente: {duracion_twilio}s")
                                             elif 3 <= duracion_twilio < 10:
                                                 final_status = 'No Contesto'
+                                                st.warning(f"📞 **Llamada Muy Corta** - Posible desconexión ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Duración muy corta: {duracion_twilio}s")
                                             else:
                                                 final_status = 'Llamado'
+                                                st.success(f"✅ **Conversación Establecida** - Llamada completada ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Conversación establecida: {duracion_twilio}s")
                                         
                                         # Caso por defecto
