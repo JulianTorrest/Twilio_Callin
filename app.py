@@ -2414,39 +2414,28 @@ with tab_op:
                                             </Dial>
                                         </Response>"""
                                         
-                                        # TwiML para el cliente (con Machine Detection pero sin silencio)
+                                        # TwiML para el cliente (optimizado para calidad y estabilidad)
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
                                             <Dial 
                                                 action="{function_url}/dial-status" 
                                                 method="POST" 
-                                                timeout="25"
+                                                timeout="30"
                                                 callerId="{st.session_state.numero_celular_agente}"
                                                 answerOnBridge="true"
                                                 record="record-from-answer"
                                                 recordingStatusCallback="{function_url}/recording-status"
                                                 trim="trim-silence"
                                                 machineDetection="Enable"
-                                                machineDetectionTimeout="3000"
+                                                machineDetectionTimeout="2000"
+                                                timeLimit="7200"
                                             >
                                                 <Number 
                                                     url="{function_url}/machine-detection" 
-                                                    machineDetection="Enable" 
-                                                    machineDetectionTimeout="3000"
                                                     statusCallbackEvent="initiated ringing answered completed"
                                                     statusCallback="{function_url}/status"
+                                                    timeLimit="7200"
                                                 >{tel}</Number>
-                                                <Conference 
-                                                    startConferenceOnEnter="true"
-                                                    endConferenceOnExit="true"
-                                                    record="record-from-start"
-                                                    recordingStatusCallback="{function_url}/recording-status"
-                                                    trim="trim-silence"
-                                                    transcribe="true"
-                                                    transcribeCallback="{function_url}/transcription-callback"
-                                                    waitUrl=""
-                                                    beep="true"
-                                                >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
                                         
@@ -2466,7 +2455,6 @@ with tab_op:
                                             twiml=twiml_cliente,
                                             to=tel,
                                             from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
-                                            machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
