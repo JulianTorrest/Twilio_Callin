@@ -457,11 +457,44 @@ if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = Non
 if 'webrtc_nombre' not in st.session_state: st.session_state.webrtc_nombre = None
 if 'webrtc_call_sid' not in st.session_state: st.session_state.webrtc_call_sid = None
 
-# --- FUNCIÓN DE VERIFICACIÓN DIFERIDA DE GRABACIONES ---
+# --- AUTO-GUARDADO DE CAMBIOS PENDIENTES ---
+if 'ultimo_autoguardado' not in st.session_state:
+    st.session_state.ultimo_autoguardado = time.time()
+    st.session_state.cambios_pendientes = False
+
+def verificar_autoguardado():
+    """Verifica si es necesario auto-guardar cambios pendientes"""
+    ahora = time.time()
+    
+    # Auto-guardar cada 30 segundos si hay cambios pendientes
+    if st.session_state.cambios_pendientes and (ahora - st.session_state.ultimo_autoguardado) > 30:
+        if URL_SHEET_CONTACTOS and st.session_state.df_contactos is not None:
+            try:
+                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                    st.session_state.ultimo_autoguardado = ahora
+                    st.session_state.cambios_pendientes = False
+                    print("[AUTOGUARDADO] ✅ Cambios guardados automáticamente")
+                    add_log("AUTO_GUARDADO: Cambios sincronizados", "SISTEMA")
+                else:
+                    print("[AUTOGUARDADO] ⚠️ Error guardando cambios, se reintentará en 30s")
+            except Exception as e:
+                print(f"[AUTOGUARDADO] ❌ Error: {e}")
+
+def marcar_cambios_pendientes():
+    """Marca que hay cambios pendientes para auto-guardar"""
+    st.session_state.cambios_pendientes = True
+    print("[DEBUG] Cambios pendientes marcados para auto-guardado")
+
+# Ejecutar verificación de auto-guardado en cada refresh
+verificar_autoguardado()
+
+# --- FUNCIÓN DE VERIFICACIÓN DIFERIDA DE GRABACIONES MEJORADA ---
 def verificar_grabaciones_pendientes():
     """
-    Verifica grabaciones pendientes leyendo desde Sheet Informe.
-    Busca registros con grabacion_pendiente='SI' y url_grabacion vacía.
+    Verifica grabaciones pendientes con estrategia mejorada:
+    - Primera verificación: 30 segundos después de la llamada
+    - Verificaciones subsiguientes: Cada 2 minutos durante 15 minutos
+    - Después: Cada 5 minutos (comportamiento original)
     """
     try:
         df_informe = read_sheet("0")
@@ -494,15 +527,33 @@ def verificar_grabaciones_pendientes():
             except:
                 continue
             
-            # Solo verificar si han pasado al menos 5 minutos
-            if tiempo_transcurrido < 300:
+            # ESTRATEGIA MEJORADA DE VERIFICACIÓN
+            # - Primera verificación: 30 segundos
+            # - Verificaciones frecuentes: Cada 2 mins hasta 15 mins
+            # - Verificaciones normales: Cada 5 mins después
+            
+            debe_verificar = False
+            
+            if tiempo_transcurrido >= 30 and tiempo_transcurrido < 900:
+                # Entre 30 seg y 15 mins: verificar cada 2 minutos
+                minutos_transcurridos = int(tiempo_transcurrido / 60)
+                if minutos_transcurridos == 0 or (tiempo_transcurrido % 120 < 30):
+                    debe_verificar = True
+                    print(f"[GRABACION] ⚡ Verificación rápida (30s-15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            elif tiempo_transcurrido >= 900:
+                # Después de 15 mins: verificar cada 5 minutos (original)
+                if tiempo_transcurrido % 300 < 30:
+                    debe_verificar = True
+                    print(f"[GRABACION] 🐌 Verificación normal (>15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            
+            if not debe_verificar:
                 continue
             
-            # Si ya pasaron más de 15 minutos, marcar como timeout
-            if tiempo_transcurrido > 900:
+            # Timeout extendido: 30 minutos en lugar de 15
+            if tiempo_transcurrido > 1800:
                 df_informe.at[idx, 'grabacion_pendiente'] = 'TIMEOUT'
                 grabaciones_actualizadas += 1
-                print(f"[GRABACION] ⏰ Timeout para {call_sid[:8]}...")
+                print(f"[GRABACION] ⏰ Timeout extendido para {call_sid[:8]}... ({int(tiempo_transcurrido/60)}min)")
                 continue
             
             try:
@@ -512,15 +563,20 @@ def verificar_grabaciones_pendientes():
                     url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
                     df_informe.at[idx, 'url_grabacion'] = url_grabacion
                     df_informe.at[idx, 'grabacion_pendiente'] = 'NO'
+                    grabaciones_actualizadas += 1
+                    print(f"[GRABACION] ✅ URL encontrada: {call_sid[:8]}... ({int(tiempo_transcurrido)}s)")
                     
-                    # Solicitar transcripción
-                    if pd.isna(row.get('transcription_sid', '')) or row.get('transcription_sid', '') == '':
+                    # Intentar transcripción si hay URL
+                    try:
                         transcription_sid = solicitar_transcripcion(recording_sid)
                         if transcription_sid:
                             df_informe.at[idx, 'transcription_sid'] = transcription_sid
+                            print(f"[GRABACION] 📝 Transcripción solicitada: {transcription_sid[:8]}...")
+                    except Exception as e_trans:
+                        print(f"[GRABACION] ⚠️ Error solicitando transcripción: {e_trans}")
+                else:
+                    print(f"[GRABACION] ❌ Sin grabación aún: {call_sid[:8]}... ({int(tiempo_transcurrido)}s)")
                     
-                    grabaciones_actualizadas += 1
-                    print(f"[GRABACION] ✅ URL obtenida para {call_sid[:8]}...")
             except Exception as e:
                 print(f"[GRABACION] ❌ Error verificando {call_sid[:8]}...: {e}")
         
@@ -529,7 +585,8 @@ def verificar_grabaciones_pendientes():
                 print(f"[GRABACION] 💾 {grabaciones_actualizadas} grabaciones actualizadas")
                 add_log(f"GRABACIONES_ACTUALIZADAS: {grabaciones_actualizadas}", "DATA")
     except Exception as e:
-        print(f"[GRABACION] ❌ Error: {e}")
+        print(f"[GRABACION] ❌ Error general verificando grabaciones: {e}")
+        add_log(f"ERROR_GRABACIONES: {e}", "ERROR")
 
 # --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
 with st.sidebar:
@@ -943,9 +1000,9 @@ with tab_op:
         search = st.text_input("🔍 Buscar Cliente:").lower()
         df = st.session_state.df_contactos
         
-        opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas"], horizontal=True)
+        opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True)
         # Lógica de mapeo de pestaña a estado del DF
-        f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada"
+        f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
         
         # Filtrado riguroso
         df_work = df[df['estado'] == f_est]
@@ -1010,8 +1067,16 @@ with tab_op:
                     col1, col2 = st.columns([2,1])
                     with col1:
                         st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
-                        val_n = st.session_state.draft_notas.get(idx, c['observacion'])
-                        nota = st.text_area("Notas:", value=val_n, key=f"n_{idx}")
+                        nota_existente = st.session_state.draft_notas.get(idx, c['observacion'])
+                        nota = st.text_area("📝 Notas:", value=nota_existente, key=f"notas_{idx}")
+                        
+                        # Auto-guardar cuando el agente modifica notas
+                        if nota != nota_existente:
+                            # Actualizar nota local inmediatamente
+                            st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                            # Marcar para auto-guardado
+                            marcar_cambios_pendientes()
+                        
                         st.session_state.draft_notas[idx] = nota
 
                     with col2:
@@ -1343,21 +1408,24 @@ with tab_op:
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status
+                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status  # Mantener Llamado/No Contesto
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
+                                        
+                                        # Marcar como gestionado en campo adicional (si existe) o mantener estado original
+                                        # El estado real (Llamado/No Contesto) se mantiene en 'estado'
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {webrtc_final_status}")
                                         
                                         # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
                                         print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
-                                        st.write(f"💾 Guardando gestión: {webrtc_final_status}")
+                                        st.write(f" Guardando gestión: {webrtc_final_status}")
                                         
                                         if URL_SHEET_INFORME:
                                             try:
-                                                st.write("🔄 Sincronizando con Sheet Informe...")
+                                                st.write(" Sincronizando con Sheet Informe...")
                                                 
                                                 # Obtener información adicional de Twilio
                                                 url_grabacion = ''
@@ -1394,7 +1462,7 @@ with tab_op:
                                                         print(f"[DEBUG] Datos de llamada obtenidos: duration={duracion_facturada}s, answered_by={estado_respuesta}, from={from_number}, to={to_number}")
                                                     
                                                     # Esperar 5 segundos para que la grabación esté disponible
-                                                    st.write("⏳ Esperando grabación (5s)...")
+                                                    st.write(" Esperando grabación (5s)...")
                                                     time.sleep(5)
                                                     
                                                     # Intentar obtener la grabación con retry (máximo 3 intentos)
@@ -1404,15 +1472,15 @@ with tab_op:
                                                     for intento in range(max_intentos):
                                                         recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
                                                         if recordings:
-                                                            recording_sid = recordings[0].sid
-                                                            url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
-                                                            print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
-                                                            st.success(f"🎙️ Grabación disponible")
+                                                            recording = recordings[0]
+                                                            url_grabacion = f"https://api.twilio.com{recording.uri.replace('.json', '.mp3')}"
+                                                            print(f"[DEBUG] Grabación encontrada: {url_grabacion}")
+                                                            st.success(" Grabación disponible")
                                                             
                                                             # PCI Mode no permite transcripciones automáticas - Grabación solamente
-                                                            st.info("📝 PCI Mode - Solo grabación disponible")
-                                                            print(f"[DEBUG] 🎤 PCI Mode detectado - Transcripción no disponible")
-                                                            print(f"[DEBUG] 📼 Grabación guardada: {recording_sid}")
+                                                            st.info(" PCI Mode - Solo grabación disponible")
+                                                            print(f"[DEBUG] PCI Mode detectado - Transcripción no disponible")
+                                                            print(f"[DEBUG] Grabación guardada: {recording.sid}")
                                                             
                                                             # No intentar transcripción en PCI Mode para evitar errores
                                                             transcription_sid = None
@@ -1421,15 +1489,15 @@ with tab_op:
                                                         else:
                                                             print(f"[DEBUG] Intento {intento + 1}/{max_intentos}: Grabación no disponible aún")
                                                             if intento < max_intentos - 1:
-                                                                st.write(f"⏳ Reintentando obtener grabación ({intento + 2}/{max_intentos})...")
+                                                                st.write(f" Reintentando obtener grabación ({intento + 2}/{max_intentos})...")
                                                                 time.sleep(3)
                                                             else:
-                                                                st.warning("⚠️ Grabación no disponible aún - Se guardará sin URL")
+                                                                st.warning(" Grabación no disponible aún - Se guardará sin URL")
                                                                 print(f"[WARNING] Grabación no encontrada después de {max_intentos} intentos")
                                                     
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
-                                                    st.warning(f"⚠️ Error obteniendo datos de Twilio: {e_twilio}")
+                                                    st.warning(f" Error obteniendo datos de Twilio: {e_twilio}")
                                                  
                                                 # Preparar fila para Sheet Informe con TODAS las columnas de Twilio
                                                 fila_informe = pd.DataFrame({
@@ -1437,7 +1505,7 @@ with tab_op:
                                                     'agente_id': [st.session_state.agente_id],
                                                     'nombre': [c['nombre']],
                                                     'telefono': [tel],
-                                                    'estado': [webrtc_final_status],
+                                                    'estado': [webrtc_final_status],  # Mantener Llamado/No Contesto real
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
@@ -1478,7 +1546,7 @@ with tab_op:
                                                         df_informe_actual = st.session_state.df_informe_cache
                                                         print(f"[DEBUG] Usando caché de Informe: {len(df_informe_actual)} registros")
                                                     
-                                                    st.write(f"📊 Registros en Informe: {len(df_informe_actual)}")
+                                                    st.write(f" Registros en Informe: {len(df_informe_actual)}")
                                                 except Exception as e_read:
                                                     print(f"[ERROR] Error leyendo Informe: {e_read}")
                                                     df_informe_actual = pd.DataFrame()
@@ -1491,32 +1559,32 @@ with tab_op:
                                                 
                                                 # Guardar en Sheet Informe
                                                 if update_sheet(df_informe_actualizado, "0"):
-                                                    st.success(f"✅ Guardado en Sheet Informe: {webrtc_final_status}")
+                                                    st.success(f" Guardado en Sheet Informe: {webrtc_final_status}")
                                                     add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                     
                                                     if not url_grabacion:
-                                                        st.info("📋 Grabación pendiente - Se verificará en 5 minutos")
-                                                        print(f"[GRABACION] 📋 Marcada como pendiente en Sheet Informe")
+                                                        st.info(" Grabación pendiente - Se verificará en 5 minutos")
+                                                        print(f"[GRABACION] Marcada como pendiente en Sheet Informe")
                                                 else:
-                                                    st.warning("⚠️ Error guardando en Sheet Informe")
+                                                    st.warning(" Error guardando en Sheet Informe")
                                                     
                                             except Exception as e_informe:
-                                                st.error(f"❌ Error en Sheet Informe: {e_informe}")
+                                                st.error(f" Error en Sheet Informe: {e_informe}")
                                         
                                         # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
                                         print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
-                                                st.write("🔄 Actualizando estado en Sheet Llamadas...")
+                                                st.write(" Actualizando estado en Sheet Llamadas...")
                                                 
                                                 # Actualizar el DataFrame completo y escribirlo de vuelta al Sheet CORRECTO
                                                 if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas")
+                                                    st.success(" Estado actualizado en Sheet Llamadas")
                                                     add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
-                                                    st.warning("⚠️ Error actualizando Sheet Llamadas")
+                                                    st.warning(" Error actualizando Sheet Llamadas")
                                             except Exception as e_llamadas:
-                                                st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
+                                                st.error(f" Error en Sheet Llamadas: {e_llamadas}")
                                                 print(f"[ERROR] WebRTC Update Llamadas: {e_llamadas}")
                                         
                                         add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
@@ -1530,7 +1598,7 @@ with tab_op:
                                         st.session_state.webrtc_idx = None
                                         st.session_state.grabacion_pausada = False
                                         
-                                        st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
+                                        st.success(" Llamada WebRTC finalizada - Pasando al siguiente contacto...")
                                         time.sleep(2)
                                         st.rerun()
                                     else:
@@ -1547,7 +1615,7 @@ with tab_op:
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
                                     segundos = tiempo_transcurrido % 60
-                                    st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                    st.markdown(f" ### Tiempo: {minutos:02d}:{segundos:02d}")
                                     
                                     # 1. Consultar estado real en Twilio
                                     print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
@@ -1583,7 +1651,7 @@ with tab_op:
                                                     
                                                     # Solo colgar si hay 1 solo participante (agente o cliente esperando solo)
                                                     if num_participantes == 1:
-                                                        st.warning(f"⏱️ Timeout: Solo 1 participante después de {tiempo_transcurrido}s - Finalizando...")
+                                                        st.warning(f" Timeout: Solo 1 participante después de {tiempo_transcurrido}s - Finalizando...")
                                                         client.calls(st.session_state.llamada_activa_sid).update(status='completed')
                                                         print(f"[DEBUG] Llamada finalizada automáticamente - 1 participante solo")
                                                         call_ended_by_system = True
@@ -1594,7 +1662,7 @@ with tab_op:
                                                         print(f"[DEBUG] Conference activa con {num_participantes} participantes - NO timeout")
                                                     else:
                                                         # 0 participantes - conferencia vacía
-                                                        st.warning(f"⚠️ Conferencia vacía - Finalizando...")
+                                                        st.warning(f" Conferencia vacía - Finalizando...")
                                                         client.calls(st.session_state.llamada_activa_sid).update(status='completed')
                                                         call_ended_by_system = True
                                                         time.sleep(2)
@@ -1607,7 +1675,7 @@ with tab_op:
                                         except Exception as e:
                                             print(f"[ERROR] Error verificando participantes de conferencia: {e}")
                                             # Si hay error, aplicar timeout simple como fallback
-                                            st.warning(f"⏱️ Timeout de conferencia ({tiempo_transcurrido}s) - Finalizando...")
+                                            st.warning(f" Timeout de conferencia ({tiempo_transcurrido}s) - Finalizando...")
                                             try:
                                                 client.calls(st.session_state.llamada_activa_sid).update(status='completed')
                                                 call_ended_by_system = True
@@ -1619,12 +1687,11 @@ with tab_op:
                                     
                                     # Colgar automáticamente si es máquina
                                     elif es_maquina and not call_ended_by_system:
-                                        st.warning(f"🤖 Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
+                                        st.warning(f" Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
                                         try:
                                             # Colgar la llamada automáticamente
                                             client.calls(st.session_state.llamada_activa_sid).update(status='completed')
-                                            print(f"[DEBUG] Llamada finalizada automáticamente por detección de máquina")
-                                            st.info("📞 Llamada finalizada automáticamente")
+                                            print(f"[DEBUG] Llamada Conference colgada manualmente")
                                             # Marcar como terminada por el sistema
                                             call_ended_by_system = True
                                             time.sleep(2)
@@ -1641,12 +1708,12 @@ with tab_op:
                                         # Mostrar botones en columnas
                                         btn_col1, btn_col2 = st.columns(2)
                                         with btn_col1:
-                                            finalizar_manual = st.button("✅ FINALIZAR GESTIÓN", type="primary")
+                                            finalizar_manual = st.button(" FINALIZAR GESTIÓN", type="primary")
                                         with btn_col2:
                                             if not st.session_state.grabacion_pausada:
-                                                pausar_grabacion = st.button("⏸️ PAUSAR GRABACIÓN")
+                                                pausar_grabacion = st.button(" PAUSAR GRABACIÓN")
                                             else:
-                                                st.info("🔴 Grabación pausada")
+                                                st.info(" Grabación pausada")
                                         
                                         # Manejar pausa de grabación
                                         if pausar_grabacion:
@@ -1663,16 +1730,16 @@ with tab_op:
                                                     if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.llamada_activa_sid):
                                                         st.session_state.grabacion_pausada = True
                                                         add_log(f"GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
-                                                        st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                                        st.success(" Grabación pausada y guardada en Sheet Informe")
                                                     else:
-                                                        st.error("❌ Error guardando en Sheet Informe")
+                                                        st.error("Error guardando en Sheet Informe")
                                                     
                                                     time.sleep(1)
                                                     st.rerun()
                                             except Exception as e:
                                                 st.error(f"Error pausando grabación: {e}")
                                     else:
-                                        st.warning(f"⚠️ Llamada terminada automáticamente: {remote.status}")
+                                        st.warning(f" Llamada terminada automáticamente: {remote.status}")
                                     
                                     # 4. Accion de Finalización (Manual o Automática)
                                     print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
@@ -1755,7 +1822,7 @@ with tab_op:
                                             final_status = 'Llamado'
                                             print(f"[DEBUG] Conference - Clasificado como Llamado por defecto")
                                         
-                                        print(f"[DEBUG] ✅ Conference - Estado final determinado: {final_status}")
+                                        print(f"[DEBUG] Estado final determinado: {final_status}")
                                         
                                         # Calculamos duración
                                         t_fin = datetime.now()
@@ -1764,17 +1831,18 @@ with tab_op:
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = final_status
+                                        st.session_state.df_contactos.at[idx, 'estado'] = final_status  # Mantener Llamado/No Contesto
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
+                                        
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {final_status}")
                                         
                                         # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
                                         print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
-                                        st.write(f"💾 Guardando gestión: {final_status}")
+                                        st.write(f" Guardando gestión: {final_status}")
                                         
                                         if URL_SHEET_INFORME:
                                             try:
@@ -1851,7 +1919,7 @@ with tab_op:
                                                     'agente_id': [st.session_state.agente_id],
                                                     'nombre': [c['nombre']],
                                                     'telefono': [tel],
-                                                    'estado': [final_status],
+                                                    'estado': [final_status],  # Mantener Llamado/No Contesto real
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
@@ -1964,6 +2032,42 @@ with tab_op:
                             # --- OPCIÓN DE REPROGRAMAR (SIEMPRE DISPONIBLE) ---
                             st.divider()
                             st.write("**📅 Reprogramar Llamada**")
+                            
+                            # Botón para guardar notas con acumulación
+                            if st.button("💾 Guardar Notas", key=f"save_notes_{idx}"):
+                                # Obtener nota existente
+                                nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
+                                
+                                # Combinar notas si ya existe algo
+                                if nota_existente and nota_existente.strip():
+                                    if nota.strip() and nota != nota_existente:
+                                        # Acumular notas con timestamp
+                                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                        nota_acumulada = f"{nota_existente} | [{timestamp}] {nota}"
+                                    else:
+                                        nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
+                                else:
+                                    nota_acumulada = nota  # Usar nueva nota si no existe nada
+                                
+                                # Actualizar DataFrame local con notas acumuladas
+                                st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
+                                
+                                # Actualizar Sheet Llamadas
+                                if URL_SHEET_CONTACTOS:
+                                    try:
+                                        if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                            add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
+                                            st.success("✅ Notas acumuladas en Sheet Llamadas")
+                                        else:
+                                            st.warning("⚠️ Notas acumuladas localmente, pero error actualizando Sheet Llamadas")
+                                    except Exception as e:
+                                        st.error(f"❌ Error acumulando notas: {e}")
+                                else:
+                                    st.success("✅ Notas acumuladas localmente")
+                                
+                                time.sleep(1)
+                                st.rerun()
+                            
                             fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
                             hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
                              
@@ -1971,10 +2075,13 @@ with tab_op:
                                 # Combinar fecha y hora
                                 fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
                                 
+                                # Obtener nota actual (que ya incluye notas acumuladas si se guardaron)
+                                nota_actual = st.session_state.df_contactos.at[idx, 'observacion']
+                                
                                 # Actualizar DataFrame local
                                 st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
                                 st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
-                                st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual  # Mantener notas acumuladas
                                 st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                 
                                 # Actualizar Sheet Llamadas
