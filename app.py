@@ -16,7 +16,7 @@ import math
 import random
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
+st.set_page_config(page_title="Camacol Dialer Pro", layout="wide")
 
 st.markdown("""
     <style>
