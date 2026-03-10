@@ -12,6 +12,8 @@ import threading
 import hashlib
 from pytz import timezone
 import pytz
+import math
+import random
 
 # --- CONFIGURACION DE PAGINA ---
 st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
@@ -23,6 +25,83 @@ st.markdown("""
     .log-box { font-family: monospace; font-size: 0.8rem; background: #1e1e1e; color: #4af626; padding: 10px; border-radius: 5px; height: 180px; overflow-y: auto; }
     .latency-green { height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; }
     .latency-red { height: 10px; width: 10px; background-color: #dc3545; border-radius: 50%; display: inline-block; }
+    
+    /* Estilos para recordatorios inteligentes */
+    .reminder-alert {
+        background: linear-gradient(135deg, #ff6b6b, #ff8787);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+        box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+        animation: pulse 2s infinite;
+        border-left: 5px solid #ff4444;
+    }
+    
+    .reminder-urgent {
+        background: linear-gradient(135deg, #ff6b6b, #ff4444);
+        animation: urgent-pulse 1s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.02); }
+        100% { transform: scale(1); }
+    }
+    
+    @keyframes urgent-pulse {
+        0% { transform: scale(1); box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); }
+        50% { transform: scale(1.05); box-shadow: 0 6px 20px rgba(255, 107, 107, 0.5); }
+        100% { transform: scale(1); box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); }
+    }
+    
+    .countdown-timer {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #ff4444;
+        text-align: center;
+        margin: 10px 0;
+    }
+    
+    /* Estilos para dashboard de productividad */
+    .productivity-card {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        margin-bottom: 15px;
+    }
+    
+    .metric-positive {
+        color: #28a745;
+        font-weight: bold;
+    }
+    
+    .metric-negative {
+        color: #dc3545;
+        font-weight: bold;
+    }
+    
+    .progress-bar-container {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 10px;
+        padding: 3px;
+        margin: 10px 0;
+    }
+    
+    .progress-bar-fill {
+        background: linear-gradient(90deg, #28a745, #20c997);
+        height: 20px;
+        border-radius: 7px;
+        transition: width 0.5s ease;
+    }
+    
+    .dashboard-header {
+        text-align: center;
+        color: #2c3e50;
+        margin-bottom: 20px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -684,7 +763,6 @@ def guardar_logs_en_drive():
         print(f"[ERROR] Error guardando logs en Drive: {e}")
         import traceback
         print(traceback.format_exc())
-        return False
 
 # --- 3. AUDITORIA AUTOMATICA ---
 if 'logs' not in st.session_state: st.session_state.logs = []
@@ -695,6 +773,268 @@ def add_log(mensaje, tipo="INFO"):
     st.session_state.logs.append(entry)
     # Imprimir en consola de Streamlit Cloud para debugging
     print(f"[LOG] {entry}")
+
+# --- SISTEMA DE RECORDATORIOS INTELIGENTES ---
+def verificar_recordatorios_proximos(df_contactos):
+    """Verifica llamadas programadas en los próximos 5 minutos y muestra alertas
+    
+    Args:
+        df_contactos: DataFrame con los contactos
+        
+    Returns:
+        list: Lista de recordatorios encontrados
+    """
+    if df_contactos is None:
+        return []
+    
+    ahora = obtener_hora_bogota()
+    limite_tiempo = ahora + timedelta(minutes=5)
+    
+    # Filtrar contactos programados en los próximos 5 minutos
+    programados_proximos = df_contactos[
+        (df_contactos['estado'] == 'Programada') &
+        (pd.notna(df_contactos['proxima_llamada'])) &
+        (df_contactos['proxima_llamada'] != '')
+    ].copy()
+    
+    if programados_proximos.empty:
+        return []
+    
+    recordatorios = []
+    
+    for idx, contacto in programados_proximos.iterrows():
+        try:
+            fecha_prog = pd.to_datetime(contacto['proxima_llamada'])
+            
+            # Convertir a zona horaria de Bogotá si es necesario
+            if fecha_prog.tzinfo is None:
+                fecha_prog = TZ_BOGOTA.localize(fecha_prog)
+            else:
+                fecha_prog = fecha_prog.astimezone(TZ_BOGOTA)
+            
+            # Verificar si está en los próximos 5 minutos
+            if ahora <= fecha_prog <= limite_tiempo:
+                tiempo_restante = (fecha_prog - ahora).total_seconds()
+                
+                if tiempo_restante <= 300:  # 5 minutos = 300 segundos
+                    minutos_restantes = int(tiempo_restante / 60)
+                    segundos_restantes = int(tiempo_restante % 60)
+                    
+                    recordatorios.append({
+                        'nombre': contacto['nombre'],
+                        'telefono': contacto['telefono'],
+                        'fecha_prog': fecha_prog,
+                        'minutos_restantes': minutos_restantes,
+                        'segundos_restantes': segundos_restantes,
+                        'tiempo_segundos': tiempo_restante,
+                        'idx': idx
+                    })
+                    
+        except Exception as e:
+            print(f"[ERROR] Error procesando recordatorio para {contacto.get('nombre', 'Unknown')}: {e}")
+    
+    # Ordenar por tiempo restante (más urgente primero)
+    recordatorios.sort(key=lambda x: x['tiempo_segundos'])
+    
+    return recordatorios
+
+def mostrar_recordatorios(recordatorios):
+    """Muestra los recordatorios con alertas visuales animadas
+    
+    Args:
+        recordatorios: Lista de recordatorios encontrados
+    """
+    if not recordatorios:
+        return
+    
+    st.markdown("### 🔔 RECORDATORIOS INTELIGENTES")
+    
+    for recordatorio in recordatorios:
+        urgencia_class = "reminder-urgent" if recordatorio['tiempo_segundos'] <= 60 else "reminder-alert"
+        
+        # Construir teléfono completo
+        telefono = str(recordatorio['telefono'])
+        if not telefono.startswith('+'):
+            telefono = f"+57{telefono}"
+        
+        st.markdown(f"""
+        <div class="{urgencia_class}">
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.5em; margin-right: 10px;">⏰</span>
+                <strong style="font-size: 1.2em;">¡LLAMADA INMINENTE!</strong>
+            </div>
+            <div style="margin-bottom: 5px;">
+                <strong>📞 Contacto:</strong> {recordatorio['nombre']}
+            </div>
+            <div style="margin-bottom: 5px;">
+                <strong>📱 Teléfono:</strong> {telefono}
+            </div>
+            <div class="countdown-timer">
+                ⏱️ Tiempo restante: {recordatorio['minutos_restantes']}:{recordatorio['segundos_restantes']:02d}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Agregar sonido de notificación automático (solo para muy urgentes)
+        if recordatorio['tiempo_segundos'] <= 60:
+            st.markdown("""
+            <audio autoplay>
+                <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmFgU7k9n1unEiBC13yO/eizEIHWq+8+OWT" type="audio/wav">
+            </audio>
+            """, unsafe_allow_html=True)
+
+# --- DASHBOARD DE PRODUCTIVIDAD EN TIEMPO REAL ---
+def calcular_metricas_productividad(df_contactos, df_informe=None):
+    """Calcula métricas de productividad para el dashboard
+    
+    Args:
+        df_contactos: DataFrame con los contactos
+        df_informe: DataFrame con el informe de llamadas (opcional)
+        
+    Returns:
+        dict: Diccionario con todas las métricas calculadas
+    """
+    if df_contactos is None:
+        return {}
+    
+    ahora = obtener_hora_bogota()
+    hoy = ahora.date()
+    
+    # Métricas básicas
+    total_contactos = len(df_contactos)
+    contactados = len(df_contactos[df_contactos['estado'] == 'Llamado'])
+    no_contactados = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
+    programados = len(df_contactos[df_contactos['estado'] == 'Programada'])
+    pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
+    
+    # Tasa de contacto
+    gestionados = contactados + no_contactados
+    tasa_contacto = (contactados / gestionados * 100) if gestionados > 0 else 0
+    
+    # Duración promedio (si hay informe)
+    duracion_promedio = 0
+    if df_informe is not None and not df_informe.empty:
+        duraciones = df_informe[df_informe['duracion_seg'].notna()]['duracion_seg']
+        if not duraciones.empty:
+            duracion_promedio = duraciones.mean()
+    
+    # Métricas del día de hoy
+    llamadas_hoy = 0
+    if df_informe is not None and not df_informe.empty:
+        df_informe['fecha_llamada'] = pd.to_datetime(df_informe['fecha_llamada'], errors='coerce')
+        llamadas_hoy = len(df_informe[df_informe['fecha_llamada'].dt.date == hoy])
+    
+    # Comparación con día anterior
+    llamadas_ayer = 0
+    if df_informe is not None and not df_informe.empty:
+        ayer = hoy - timedelta(days=1)
+        llamadas_ayer = len(df_informe[df_informe['fecha_llamada'].dt.date == ayer])
+    
+    delta_dias = llamadas_hoy - llamadas_ayer
+    delta_porcentaje = (delta_dias / llamadas_ayer * 100) if llamadas_ayer > 0 else 0
+    
+    # Meta diaria (configurable)
+    meta_diaria = 50  # Puede ser configurable en el futuro
+    progreso_diario = (llamadas_hoy / meta_diaria * 100) if meta_diaria > 0 else 0
+    
+    return {
+        'total_contactos': total_contactos,
+        'contactados': contactados,
+        'no_contactados': no_contactados,
+        'programados': programados,
+        'pendientes': pendientes,
+        'tasa_contacto': tasa_contacto,
+        'duracion_promedio': duracion_promedio,
+        'llamadas_hoy': llamadas_hoy,
+        'llamadas_ayer': llamadas_ayer,
+        'delta_dias': delta_dias,
+        'delta_porcentaje': delta_porcentaje,
+        'meta_diaria': meta_diaria,
+        'progreso_diario': progreso_diario
+    }
+
+def mostrar_dashboard_productividad(metricas):
+    """Muestra el dashboard de productividad con visualización atractiva
+    
+    Args:
+        metricas: Diccionario con las métricas calculadas
+    """
+    if not metricas:
+        return
+    
+    st.markdown("### 📊 DASHBOARD DE PRODUCTIVIDAD")
+    
+    # Tarjetas principales
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        delta_class = "metric-positive" if metricas['delta_dias'] >= 0 else "metric-negative"
+        delta_icon = "📈" if metricas['delta_dias'] >= 0 else "📉"
+        
+        st.markdown(f"""
+        <div class="productivity-card">
+            <h4>📞 Llamadas Hoy</h4>
+            <h2>{metricas['llamadas_hoy']}</h2>
+            <div class="{delta_class}">
+                {delta_icon} {metricas['delta_dias']:+d} ({metricas['delta_porcentaje']:+.1f}%)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="productivity-card">
+            <h4>👥 Contactados</h4>
+            <h2>{metricas['contactados']}</h2>
+            <div>Tasa: {metricas['tasa_contacto']:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        duracion_minutos = int(metricas['duracion_promedio'] / 60) if metricas['duracion_promedio'] > 0 else 0
+        duracion_segundos = int(metricas['duracion_promedio'] % 60) if metricas['duracion_promedio'] > 0 else 0
+        
+        st.markdown(f"""
+        <div class="productivity-card">
+            <h4>⏱️ Duración Promedio</h4>
+            <h2>{duracion_minutos}:{duracion_segundos:02d}</h2>
+            <div>{metricas['duracion_promedio']:.0f} segundos</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="productivity-card">
+            <h4>📅 Programados</h4>
+            <h2>{metricas['programados']}</h2>
+            <div>Pendientes: {metricas['pendientes']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Barra de progreso diaria
+    st.markdown("### 🎯 META DIARIA")
+    
+    progress_color = "#28a745" if metricas['progreso_diario'] >= 100 else "#ffc107" if metricas['progreso_diario'] >= 50 else "#dc3545"
+    
+    st.markdown(f"""
+    <div style="text-align: center; margin-bottom: 10px;">
+        <strong>Progreso: {metricas['llamadas_hoy']} / {metricas['meta_diaria']} llamadas ({metricas['progreso_diario']:.1f}%)</strong>
+    </div>
+    <div class="progress-bar-container">
+        <div class="progress-bar-fill" style="width: {min(metricas['progreso_diario'], 100)}%; background: {progress_color};">
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Mensaje motivacional
+    if metricas['progreso_diario'] >= 100:
+        st.success("🎉 ¡Felicidades! Has alcanzado tu meta diaria")
+    elif metricas['progreso_diario'] >= 75:
+        st.info("💪 ¡Estás muy cerca! ¡Sigue así!")
+    elif metricas['progreso_diario'] >= 50:
+        st.warning("⚡ Vamos bien, pero podemos mejorar")
+    else:
+        st.error("🔥 ¡Es momento de darlo todo!")
 
 # --- 3. CONTROL DE ACCESO Y ESTADO ---
 if 'agente_id' not in st.session_state:
@@ -980,7 +1320,38 @@ except:
 tab_op, tab_met, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
 
 with tab_met:
-    st.subheader("Rendimiento del Agente")
+    st.subheader("📊 Dashboard de Productividad en Tiempo Real")
+    
+    # Calcular y mostrar métricas
+    if st.session_state.df_contactos is not None:
+        # Obtener datos del informe para métricas avanzadas
+        try:
+            df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
+        except:
+            df_informe = pd.DataFrame()
+        
+        # Calcular métricas
+        metricas = calcular_metricas_productividad(st.session_state.df_contactos, df_informe)
+        
+        # Mostrar dashboard
+        mostrar_dashboard_productividad(metricas)
+        
+        # Auto-refresh cada 30 segundos para llamadas próximas
+        if 'ultimo_refresh_dashboard' not in st.session_state:
+            st.session_state.ultimo_refresh_dashboard = time.time()
+        
+        if time.time() - st.session_state.ultimo_refresh_dashboard > 30:
+            st.session_state.ultimo_refresh_dashboard = time.time()
+            st.rerun()
+        
+        st.caption("🔄 Auto-refresh cada 30 segundos")
+    else:
+        st.warning("⚠️ No hay datos de contactos disponibles")
+    
+    st.divider()
+    
+    # Métricas adicionales (mantener compatibilidad con datos históricos)
+    st.subheader("📈 Métricas Históricas")
     if not df_historico.empty:
         # Aseguramos que la columna agente_id existe para filtrar
         if 'agente_id' in df_historico.columns:
@@ -1090,6 +1461,24 @@ with tab_pruebas:
 
 # --- 6. OPERACIÓN CON WEBRTC (BLOQUE EXPANDIDO Y REFORZADO) ---
 with tab_op:
+    # --- SISTEMA DE RECORDATORIOS INTELIGENTES ---
+    if st.session_state.df_contactos is not None:
+        # Verificar recordatorios próximos
+        recordatorios = verificar_recordatorios_proximos(st.session_state.df_contactos)
+        
+        # Mostrar recordatorios si hay alguno
+        if recordatorios:
+            mostrar_recordatorios(recordatorios)
+            
+            # Auto-refresh más frecuente cuando hay recordatorios
+            if 'ultimo_refresh_recordatorios' not in st.session_state:
+                st.session_state.ultimo_refresh_recordatorios = time.time()
+            
+            # Refresh cada 15 segundos cuando hay recordatorios activos
+            if time.time() - st.session_state.ultimo_refresh_recordatorios > 15:
+                st.session_state.ultimo_refresh_recordatorios = time.time()
+                st.rerun()
+    
     # Componente WebRTC de Twilio Client
     if 'webrtc_token' not in st.session_state:
         st.session_state.webrtc_token = None
