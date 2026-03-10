@@ -14,7 +14,7 @@ from pytz import timezone
 import pytz
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Gestión de Llamadas Camacol", layout="wide")
+st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
 
 st.markdown("""
     <style>
@@ -1141,17 +1141,54 @@ with tab_op:
             try {{
                 updateStatus('🟡 Conectando con Twilio...');
                 
-                // Obtener token
+                // Obtener token con retry automático
                 const tokenUrl = `{function_url_base}/token?identity={st.session_state.agente_id}`;
                 console.log('🔍 URL del token:', tokenUrl);
                 
-                const response = await fetch(tokenUrl);
-                console.log('📡 Respuesta del token:', response.status);
+                let response;
+                let retries = 0;
+                const maxRetries = 3;
+                
+                // Retry automático para AccessTokenExpired
+                while (retries < maxRetries) {{
+                    try {{
+                        response = await fetch(tokenUrl);
+                        console.log(`📡 Intento ${{retries + 1}} - Respuesta del token: ${{response.status}}`);
+                        
+                        if (response.ok) {{
+                            break; // Token obtenido exitosamente
+                        }}
+                        
+                        const errorText = await response.text();
+                        console.error(`❌ Error en intento ${{retries + 1}}: ${{response.status}} - ${{errorText}}`);
+                        
+                        // Si es AccessTokenExpired, esperar y reintentar
+                        if (response.status === 401 || errorText.includes('AccessTokenExpired')) {{
+                            retries++;
+                            if (retries < maxRetries) {{
+                                console.log(`🔄 AccessTokenExpired detectado, reintentando en ${{retries * 2}} segundos...`);
+                                updateStatus(`🔄 Token expirado, reintentando (${{retries}}/${{maxRetries}})...`);
+                                await new Promise(resolve => setTimeout(resolve, retries * 2000));
+                                continue;
+                            }}
+                        }}
+                        
+                        // Si no es AccessTokenExpired o se acabaron los reintentos
+                        throw new Error(`Error ${{response.status}}: ${{errorText}}`);
+                        
+                    }} catch (fetchError) {{
+                        retries++;
+                        if (retries < maxRetries && fetchError.message.includes('AccessTokenExpired')) {{
+                            console.log(`🔄 Error de token, reintentando en ${{retries * 2}} segundos...`);
+                            await new Promise(resolve => setTimeout(resolve, retries * 2000));
+                            continue;
+                        }}
+                        throw fetchError;
+                    }}
+                }}
                 
                 if (!response.ok) {{
-                    const errorText = await response.text();
-                    console.error('❌ Error en respuesta:', errorText);
-                    throw new Error(`Error ${{response.status}}: ${{errorText}}`);
+                    throw new Error(`No se pudo obtener token después de ${{maxRetries}} intentos`);
                 }}
                 
                 const data = await response.json();
@@ -1352,6 +1389,20 @@ with tab_op:
                 with st.expander(f"📞 {c['nombre']} - {tel}", expanded=False):
                     col1, col2 = st.columns([2,1])
                     with col1:
+                        # Mostrar información de programación si está programada
+                        if c['estado'] == 'Programada' and pd.notna(c.get('proxima_llamada')) and c.get('proxima_llamada'):
+                            try:
+                                fecha_prog = pd.to_datetime(c['proxima_llamada'])
+                                fecha_formateada = fecha_prog.strftime("%Y-%m-%d %H:%M")
+                                st.markdown(f"""
+                                <div style="background-color: #e3f2fd; padding: 10px; border-radius: 8px; border-left: 4px solid #2196f3; margin-bottom: 10px;">
+                                    <strong>📅 Programado para:</strong> {fecha_formateada}<br>
+                                    <small>⏰ Faltan {(fecha_prog - datetime.now()).total_seconds() / 3600:.1f} horas</small>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            except Exception as e:
+                                st.info(f"📅 Programado para: {c['proxima_llamada']}")
+                        
                         st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
                         nota_existente = st.session_state.draft_notas.get(idx, c['observacion'])
                         nota = st.text_area("📝 Notas:", value=nota_existente, key=f"notas_{idx}")
@@ -2032,6 +2083,13 @@ with tab_op:
                                     if finalizar_manual or call_ended_by_system:
                                         print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
                                         
+                                        # Marcar que fue finalización manual por el agente
+                                        if finalizar_manual:
+                                            st.session_state.finalizacion_manual_agente = True
+                                            print(f"[DEBUG] Finalización manual por agente marcada")
+                                        else:
+                                            st.session_state.finalizacion_manual_agente = False
+                                        
                                         # Si es finalización manual, colgar la llamada en Twilio primero
                                         if finalizar_manual and st.session_state.llamada_activa_sid:
                                             try:
@@ -2049,31 +2107,33 @@ with tab_op:
                                         
                                         # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS (igual que WebRTC)
                                         
-                                        # PRIORIDAD ALTA 1: Número inválido/inexistente
-                                        if remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
+                                        # PRIORIDAD ALTA 1: Si fue finalizada manualmente por el agente (botón "FINALIZAR GESTIÓN")
+                                        if st.session_state.get('finalizacion_manual_agente', False):
+                                            final_status = 'Llamado'
+                                            print(f"[DEBUG] Conference - Finalización manual por agente - Clasificado como Llamado")
+                                        # PRIORIDAD ALTA 2: Número inválido/inexistente
+                                        elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
                                             final_status = 'No Contesto'
-                                            print(f"[DEBUG] Conference - Número inválido: {error_code}")
-                                        
+                                            st.error(f"❌ Número inválido o inexistente (error {error_code})")
+                                            print(f"[DEBUG] Conference - Clasificado como No Contesto - Número inválido: {error_code}")
                                         # PRIORIDAD MEDIA 1: Número bloqueado/spam
                                         elif remote.status == 'failed' and error_code in ['21610', '30006']:
                                             final_status = 'No Contesto'
-                                            print(f"[DEBUG] Conference - Número bloqueado: {error_code}")
-                                        
+                                            st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
+                                            print(f"[DEBUG] Conference - Clasificado como No Contesto - Número bloqueado: {error_code}")
                                         # PRIORIDAD MEDIA 2: Error de red
                                         elif remote.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
                                             final_status = 'No Contesto'
-                                            print(f"[DEBUG] Conference - Error de red: {error_code}")
-                                        
+                                            st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
+                                            print(f"[DEBUG] Conference - Clasificado como No Contesto - Error de red: {error_code}")
                                         # Caso 1: No contestó, ocupado, cancelado
                                         elif remote.status in ['no-answer', 'busy', 'canceled']:
                                             final_status = 'No Contesto'
                                             print(f"[DEBUG] Conference - No contestó: {remote.status}")
-                                        
                                         # Caso 2: Fallo genérico
                                         elif remote.status == 'failed':
                                             final_status = 'No Contesto'
                                             print(f"[DEBUG] Conference - Fallo genérico: {error_code}")
-                                        
                                         # PRIORIDAD ALTA 3: Buzón de voz mejorado
                                         elif answered_by in ['machine_start', 'fax']:
                                             if duracion_twilio < 5:
@@ -2298,6 +2358,7 @@ with tab_op:
                                         st.session_state.conference_name = None
                                         st.session_state.conference_idx = None
                                         st.session_state.grabacion_pausada = False
+                                        st.session_state.finalizacion_manual_agente = False  # Limpiar variable
                                         time.sleep(2)
                                         st.rerun()
                                     
