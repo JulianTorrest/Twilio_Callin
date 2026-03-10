@@ -2414,7 +2414,7 @@ with tab_op:
                                             </Dial>
                                         </Response>"""
                                         
-                                        # TwiML para el cliente (con beep de entrada para el agente - SIN DELAY)
+                                        # TwiML para el cliente (con Machine Detection pero sin silencio)
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
                                             <Dial 
@@ -2422,10 +2422,20 @@ with tab_op:
                                                 method="POST" 
                                                 timeout="25"
                                                 callerId="{st.session_state.numero_celular_agente}"
+                                                answerOnBridge="true"
                                                 record="record-from-answer"
                                                 recordingStatusCallback="{function_url}/recording-status"
                                                 trim="trim-silence"
+                                                machineDetection="Enable"
+                                                machineDetectionTimeout="3000"
                                             >
+                                                <Number 
+                                                    url="{function_url}/machine-detection" 
+                                                    machineDetection="Enable" 
+                                                    machineDetectionTimeout="3000"
+                                                    statusCallbackEvent="initiated ringing answered completed"
+                                                    statusCallback="{function_url}/status"
+                                                >{tel}</Number>
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
