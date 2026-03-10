@@ -10,6 +10,8 @@ import plotly.express as px
 import re
 import threading
 import hashlib
+from pytz import timezone
+import pytz
 
 # --- CONFIGURACION DE PAGINA ---
 st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
@@ -54,6 +56,27 @@ try:
 except Exception as e:
     st.error(f"Error de configuración: {e}")
     st.stop()
+
+# --- CONFIGURACIÓN DE ZONA HORARIA ---
+# Configurar zona horaria de Bogotá (UTC-5)
+TZ_BOGOTA = timezone('America/Bogota')
+
+def obtener_hora_bogota():
+    """Obtiene la fecha y hora actual en zona horaria de Bogotá"""
+    return datetime.now(TZ_BOGOTA)
+
+def convertir_a_bogota(fecha_utc):
+    """Convierte una fecha UTC a zona horaria de Bogotá"""
+    if fecha_utc.tzinfo is None:
+        # Si no tiene timezone, asumir UTC
+        fecha_utc = pytz.UTC.localize(fecha_utc)
+    return fecha_utc.astimezone(TZ_BOGOTA)
+
+def formatear_fecha_bogota(fecha):
+    """Formatea fecha en zona horaria de Bogotá para mostrar en UI"""
+    if fecha.tzinfo is None:
+        fecha = TZ_BOGOTA.localize(fecha)
+    return fecha
 
 # --- SISTEMA DE SANITIZACIÓN Y SEGURIDAD ---
 def sanitizar_nota(nota):
@@ -2331,8 +2354,14 @@ with tab_op:
                                 time.sleep(1)
                                 st.rerun()
                             
-                            fecha_prog = st.date_input("Fecha:", value=datetime.now().date(), key=f"fecha_{idx}")
-                            hora_prog = st.time_input("Hora:", value=datetime.now().time(), key=f"hora_{idx}")
+                            # Obtener hora actual en Bogotá para valores por defecto
+                            hora_bogota_actual = obtener_hora_bogota()
+                            
+                            fecha_prog = st.date_input("Fecha:", value=hora_bogota_actual.date(), key=f"fecha_{idx}")
+                            hora_prog = st.time_input("Hora:", value=hora_bogota_actual.time(), key=f"hora_{idx}")
+                            
+                            # Mostrar información de zona horaria
+                            st.caption(f"🕐 Zona horaria: Bogotá (UTC-5) - Hora actual: {hora_bogota_actual.strftime('%Y-%m-%d %H:%M:%S')}")
                              
                             if st.button("✅ Programar", key=f"prog_{idx}"):
                                 # Combinar fecha y hora
