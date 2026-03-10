@@ -2392,8 +2392,30 @@ with tab_op:
                                         # Paso 1: Llamar al agente primero
                                         print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
                                  
-                                        # Crear TwiML para la conferencia con grabación y transcripción
-                                        twiml_conference = f"""<?xml version="1.0" encoding="UTF-8"?>
+                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                        
+                                        # TwiML para el agente (con tonos de notificación)
+                                        twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                                        <Response>
+                                            <Say language="es-MX">Conectando llamada</Say>
+                                            <Play digits="1"></Play>
+                                            <Dial>
+                                                <Conference 
+                                                    startConferenceOnEnter="true"
+                                                    endConferenceOnExit="true"
+                                                    record="record-from-start"
+                                                    recordingStatusCallback="{function_url}/recording-status"
+                                                    trim="trim-silence"
+                                                    transcribe="true"
+                                                    transcribeCallback="{function_url}/transcription-callback"
+                                                    waitUrl=""
+                                                    beep="true"
+                                                >{conference_name}</Conference>
+                                            </Dial>
+                                        </Response>"""
+                                        
+                                        # TwiML para el cliente (con beep de entrada para el agente)
+                                        twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
                                             <Dial>
                                                 <Conference 
@@ -2405,28 +2427,25 @@ with tab_op:
                                                     transcribe="true"
                                                     transcribeCallback="{function_url}/transcription-callback"
                                                     waitUrl=""
-                                                    beep="false"
-                                                >Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}</Conference>
+                                                    beep="true"
+                                                >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
                                         
                                         # Llamar al agente
                                         call_agente = client.calls.create(
-                                            twiml=twiml_conference,
+                                            twiml=twiml_agente,
                                             to=st.session_state.numero_celular_agente,
                                             from_=twilio_number,
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
-                                        # Esperar 2 segundos para que el agente conteste
-                                        time.sleep(2)
-                                        
-                                        # Paso 2: Llamar al cliente usando número del agente como Caller ID
+                                        # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
                                         print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
                                         
                                         call_cliente = client.calls.create(
-                                            twiml=twiml_conference,
+                                            twiml=twiml_cliente,
                                             to=tel,
                                             from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
                                             machine_detection='Enable',
