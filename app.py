@@ -1036,6 +1036,239 @@ def mostrar_dashboard_productividad(metricas):
     else:
         st.error("🔥 ¡Es momento de darlo todo!")
 
+# --- SISTEMA DE BÚSQUEDA AVANZADA ---
+def busqueda_avanzada(df_contactos, query):
+    """Búsqueda predictiva con puntuación de relevancia
+    
+    Args:
+        df_contactos: DataFrame con los contactos
+        query: Término de búsqueda
+        
+    Returns:
+        tuple: (DataFrame filtrado, lista de resultados con puntuación)
+    """
+    if df_contactos is None or df_contactos.empty or not query.strip():
+        return df_contactos, []
+    
+    query = query.lower().strip()
+    resultados = []
+    
+    for idx, contacto in df_contactos.iterrows():
+        puntuacion = 0
+        coincidencias = []
+        
+        # Búsqueda en nombre (3 puntos)
+        nombre = str(contacto.get('nombre', '')).lower()
+        if query in nombre:
+            puntuacion += 3
+            coincidencias.append(f"Nombre: {contacto.get('nombre', '')}")
+        
+        # Búsqueda en teléfono (2 puntos)
+        telefono = str(contacto.get('telefono', '')).replace('+57', '').replace('+', '')
+        if query in telefono:
+            puntuacion += 2
+            coincidencias.append(f"Teléfono: {contacto.get('telefono', '')}")
+        
+        # Búsqueda en notas/observaciones (1 punto)
+        notas = str(contacto.get('observacion', '')).lower()
+        if query in notas:
+            puntuacion += 1
+            coincidencias.append("Notas")
+        
+        # Búsqueda en estado
+        estado = str(contacto.get('estado', '')).lower()
+        if query in estado:
+            puntuacion += 1
+            coincidencias.append(f"Estado: {contacto.get('estado', '')}")
+        
+        if puntuacion > 0:
+            resultados.append({
+                'idx': idx,
+                'puntuacion': puntuacion,
+                'coincidencias': coincidencias,
+                'contacto': contacto
+            })
+    
+    # Ordenar por puntuación (más relevante primero)
+    resultados.sort(key=lambda x: x['puntuacion'], reverse=True)
+    
+    if resultados:
+        # Crear DataFrame con resultados ordenados
+        indices_resultado = [r['idx'] for r in resultados]
+        df_resultado = df_contactos.loc[indices_resultado].copy()
+        return df_resultado, resultados
+    else:
+        return pd.DataFrame(), []
+
+def mostrar_feedback_busqueda(resultados, query):
+    """Muestra feedback visual de resultados encontrados
+    
+    Args:
+        resultados: Lista de resultados con puntuación
+        query: Término de búsqueda
+    """
+    if not resultados:
+        if query.strip():
+            st.info(f"🔍 No se encontraron resultados para '{query}'")
+        return
+    
+    total_resultados = len(resultados)
+    puntuacion_max = max(r['puntuacion'] for r in resultados)
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c8); padding: 10px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 15px;">
+        <strong>🔍 Resultados encontrados:</strong> {total_resultados} contactos para "{query}"<br>
+        <small>📊 Relevancia máxima: {puntuacion_max}/5 puntos</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Mostrar los 3 mejores resultados con detalles
+    st.markdown("**🌟 Mejores coincidencias:**")
+    for i, resultado in enumerate(resultados[:3]):
+        contacto = resultado['contacto']
+        telefono = str(contacto.get('telefono', ''))
+        if not telefono.startswith('+'):
+            telefono = f"+57{telefono}"
+        
+        st.markdown(f"""
+        <div style="background: #f8f9fa; padding: 8px; border-radius: 5px; margin-bottom: 5px; border-left: 3px solid #007bff;">
+            <strong>{i+1}. {contacto.get('nombre', '')}</strong> - {telefono}<br>
+            <small>📍 {contacto.get('estado', '')} | 🎯 Puntuación: {resultado['puntuacion']}/5</small><br>
+            <small>🔍 Coincidencias: {', '.join(resultado['coincidencias'])}</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- SISTEMA DE NOTIFICACIONES INTELIGENTES ---
+def analizar_notificaciones_contextuales(df_contactos, metricas):
+    """Analiza el contexto y genera notificaciones inteligentes
+    
+    Args:
+        df_contactos: DataFrame con los contactos
+        metricas: Diccionario con métricas de productividad
+        
+    Returns:
+        list: Lista de notificaciones contextuales
+    """
+    if df_contactos is None or metricas is None:
+        return []
+    
+    notificaciones = []
+    ahora = obtener_hora_bogota()
+    hora_actual = ahora.hour
+    
+    # 1. Alerta de fin de jornada si meta no alcanzada
+    if hora_actual >= 17 and metricas.get('progreso_diario', 0) < 80:
+        llamadas_faltantes = metricas.get('meta_diaria', 50) - metricas.get('llamadas_hoy', 0)
+        notificaciones.append({
+            'tipo': 'alerta_meta',
+            'titulo': '⏰ Fin de jornada',
+            'mensaje': f'Te faltan {llamadas_faltantes} llamadas para alcanzar tu meta diaria',
+            'urgencia': 'alta',
+            'color': '#dc3545',
+            'recomendacion': 'Concéntrate en llamadas rápidas o reagenda contactos difíciles'
+        })
+    
+    # 2. Alerta de sin pendientes pero con programadas
+    pendientes = metricas.get('pendientes', 0)
+    programadas = metricas.get('programados', 0)
+    
+    if pendientes == 0 and programadas > 0:
+        notificaciones.append({
+            'tipo': 'sin_pendientes',
+            'titulo': '📋 Sin pendientes',
+            'mensaje': f'Tienes {programadas} llamadas programadas para seguir trabajando',
+            'urgencia': 'media',
+            'color': '#ffc107',
+            'recomendacion': 'Revisa tus llamadas programadas y prepárate para las próximas'
+        })
+    
+    # 3. Alerta de alta tasa de no contestación (>70%)
+    gestionados = metricas.get('contactados', 0) + metricas.get('no_contactados', 0)
+    if gestionados > 10:  # Solo si hay suficientes llamadas
+        tasa_no_contestacion = (metricas.get('no_contactados', 0) / gestionados * 100) if gestionados > 0 else 0
+        
+        if tasa_no_contestacion > 70:
+            notificaciones.append({
+                'tipo': 'alta_no_contestacion',
+                'titulo': '📈 Alta tasa de no contestación',
+                'mensaje': f'Tu tasa de no contestación es del {tasa_no_contestacion:.1f}%',
+                'urgencia': 'media',
+                'color': '#fd7e14',
+                'recomendacion': 'Considera cambiar el horario de llamadas o revisar la calidad de los datos'
+            })
+    
+    # 4. Recomendación de mejor momento para llamar
+    if 9 <= hora_actual <= 11:
+        notificaciones.append({
+            'tipo': 'mejor_momento',
+            'titulo': '🌟 Mejor momento',
+            'mensaje': 'Este es un excelente momento para llamar (9-11 AM)',
+            'urgencia': 'info',
+            'color': '#17a2b8',
+            'recomendacion': 'Aprovecha las tasas de respuesta más altas del día'
+        })
+    elif 14 <= hora_actual <= 16:
+        notificaciones.append({
+            'tipo': 'buen_momento',
+            'titulo': '⭐ Buen momento',
+            'mensaje': 'Buen momento para continuar llamadas (2-4 PM)',
+            'urgencia': 'info',
+            'color': '#17a2b8',
+            'recomendacion': 'Las tasas de respuesta siguen siendo buenas'
+        })
+    elif hora_actual >= 18:
+        notificaciones.append({
+            'tipo': 'fin_dia',
+            'titulo': '🌆 Fin del día',
+            'mensaje': 'Las tasas de respuesta disminuyen después de las 6 PM',
+            'urgencia': 'baja',
+            'color': '#6c757d',
+            'recomendacion': 'Considera reprogramar para mañana o enfocarte en contactos prioritarios'
+        })
+    
+    return notificaciones
+
+def mostrar_notificaciones_inteligentes(notificaciones):
+    """Muestra las notificaciones contextuales con diseño atractivo
+    
+    Args:
+        notificaciones: Lista de notificaciones contextuales
+    """
+    if not notificaciones:
+        return
+    
+    st.markdown("### 💡 NOTIFICACIONES INTELIGENTES")
+    
+    for notificacion in notificaciones:
+        icono_urgencia = {
+            'alta': '🔴',
+            'media': '🟡',
+            'baja': '🟢',
+            'info': '🔵'
+        }.get(notificacion['urgencia'], '⚪')
+        
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, {notificacion['color']}22, {notificacion['color']}44);
+            border-left: 5px solid {notificacion['color']};
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        ">
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.2em; margin-right: 8px;">{icono_urgencia}</span>
+                <strong style="font-size: 1.1em;">{notificacion['titulo']}</strong>
+            </div>
+            <div style="margin-bottom: 8px; color: #2c3e50;">
+                {notificacion['mensaje']}
+            </div>
+            <div style="color: #6c757d; font-style: italic; font-size: 0.9em;">
+                💡 {notificacion['recomendacion']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
 # --- 3. CONTROL DE ACCESO Y ESTADO ---
 if 'agente_id' not in st.session_state:
     with st.form("login"):
@@ -1705,8 +1938,24 @@ with tab_op:
     verificar_grabaciones_pendientes()
     
     if st.session_state.df_contactos is not None:
-        search = st.text_input("🔍 Buscar Cliente:").lower()
         df = st.session_state.df_contactos
+        
+        # --- SISTEMA DE NOTIFICACIONES INTELIGENTES ---
+        # Calcular métricas para notificaciones contextuales
+        try:
+            df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
+        except:
+            df_informe = pd.DataFrame()
+        
+        metricas = calcular_metricas_productividad(df, df_informe)
+        notificaciones = analizar_notificaciones_contextuales(df, metricas)
+        
+        if notificaciones:
+            mostrar_notificaciones_inteligentes(notificaciones)
+        
+        # --- BÚSQUEDA AVANZADA ---
+        st.markdown("### 🔍 Búsqueda Avanzada")
+        search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
         
         opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True)
         # Lógica de mapeo de pestaña a estado del DF
@@ -1718,13 +1967,12 @@ with tab_op:
             df_work = df[df['estado'] == 'Llamado']
         else:
             df_work = df[df['estado'] == f_est]
+        
+        # Aplicar búsqueda avanzada si hay término de búsqueda
+        resultados_busqueda = []
         if search:
-            # Buscar en nombre o en teléfono (sin código de país, ej: 300xxxxxxx)
-            df_work = df_work[
-                df_work['nombre'].str.lower().str.contains(search, na=False) | 
-                df_work['telefono'].astype(str).str.contains(search, na=False) |
-                df_work['telefono'].astype(str).str.replace('+57', '', regex=False).str.contains(search, na=False)
-            ]
+            df_work, resultados_busqueda = busqueda_avanzada(df_work, search)
+            mostrar_feedback_busqueda(resultados_busqueda, search)
         
         # Paginación: 30 contactos por página
         CONTACTOS_POR_PAGINA = 30
