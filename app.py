@@ -16,7 +16,7 @@ import math
 import random
 
 # --- CONFIGURACION DE PAGINA ---
-st.set_page_config(page_title="Camacol Dialer Pro", layout="wide")
+st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
 
 st.markdown("""
     <style>
@@ -543,6 +543,221 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         import traceback
         print(traceback.format_exc())
         return False
+
+def contar_intentos_llamada(telefono, agente_id=None):
+    """
+    Cuenta los intentos de llamada para un número específico desde Sheet Informe
+    
+    Args:
+        telefono: Número telefónico a contar
+        agente_id: ID del agente (opcional, para filtrar por agente)
+    
+    Returns:
+        dict: {
+            'total_intentos': int,
+            'desde_pendientes': int,
+            'desde_no_contesto': int,
+            'necesita_whatsapp': bool,
+            'historial': list
+        }
+    """
+    try:
+        if not URL_SHEET_INFORME:
+            return {
+                'total_intentos': 0,
+                'desde_pendientes': 0,
+                'desde_no_contesto': 0,
+                'necesita_whatsapp': False,
+                'historial': []
+            }
+        
+        # Leer Sheet Informe
+        df_informe = read_sheet("0")
+        if df_informe.empty:
+            return {
+                'total_intentos': 0,
+                'desde_pendientes': 0,
+                'desde_no_contesto': 0,
+                'necesita_whatsapp': False,
+                'historial': []
+            }
+        
+        # Filtrar por teléfono y agente si se especifica
+        mask = df_informe['telefono'] == telefono
+        if agente_id:
+            mask &= df_informe['agente_id'] == agente_id
+        
+        llamadas_usuario = df_informe[mask].sort_values('fecha_llamada', ascending=False)
+        
+        # Contar intentos
+        total_intentos = len(llamadas_usuario)
+        
+        # Analizar el estado inicial para determinar desde dónde vino cada llamada
+        desde_pendientes = 0
+        desde_no_contesto = 0
+        
+        # La primera llamada siempre viene desde "Pendientes"
+        if total_intentos > 0:
+            desde_pendientes = 1
+            # Las llamadas restantes vienen desde "No Contesto"
+            desde_no_contesto = total_intentos - 1
+        
+        # Determinar si necesita WhatsApp (3+ intentos)
+        necesita_whatsapp = total_intentos >= 3
+        
+        # Preparar historial
+        historial = []
+        for _, row in llamadas_usuario.iterrows():
+            historial.append({
+                'fecha': row.get('fecha_llamada', ''),
+                'estado': row.get('estado', ''),
+                'duracion': row.get('duracion_seg', 0),
+                'agente': row.get('agente_id', '')
+            })
+        
+        return {
+            'total_intentos': total_intentos,
+            'desde_pendientes': desde_pendientes,
+            'desde_no_contesto': desde_no_contesto,
+            'necesita_whatsapp': necesita_whatsapp,
+            'historial': historial
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Error contando intentos de llamada: {e}")
+        return {
+            'total_intentos': 0,
+            'desde_pendientes': 0,
+            'desde_no_contesto': 0,
+            'necesita_whatsapp': False,
+            'historial': []
+        }
+
+def mostrar_contador_intentos(telefono, agente_id):
+    """
+    Muestra visualmente el contador de intentos para un número
+    
+    Args:
+        telefono: Número telefónico
+        agente_id: ID del agente actual
+    """
+    try:
+        # Obtener contador de intentos
+        intentos = contar_intentos_llamada(telefono, agente_id)
+        
+        # Mostrar contador visual
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            # Contenedor principal del contador
+            if intentos['necesita_whatsapp']:
+                # Rojo intenso para WhatsApp requerido
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #ff4757, #ff6b7a);
+                    color: white;
+                    padding: 12px;
+                    border-radius: 10px;
+                    text-align: center;
+                    border: 2px solid #ff3742;
+                    box-shadow: 0 4px 15px rgba(255, 71, 87, 0.3);
+                ">
+                    <strong>📞 Intentos: {intentos['total_intentos']}/3</strong>
+                </div>
+                """, unsafe_allow_html=True)
+            elif intentos['total_intentos'] >= 2:
+                # Naranja para cerca del límite
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #ffa502, #ff6348);
+                    color: white;
+                    padding: 12px;
+                    border-radius: 10px;
+                    text-align: center;
+                    border: 2px solid #ff9f43;
+                    box-shadow: 0 4px 15px rgba(255, 165, 2, 0.3);
+                ">
+                    <strong>📞 Intentos: {intentos['total_intentos']}/3</strong>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                # Verde para normal
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #26de81, #20bf6b);
+                    color: white;
+                    padding: 12px;
+                    border-radius: 10px;
+                    text-align: center;
+                    border: 2px solid #20bf6b;
+                    box-shadow: 0 4px 15px rgba(38, 222, 129, 0.3);
+                ">
+                    <strong>📞 Intentos: {intentos['total_intentos']}/3</strong>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col2:
+            # Detalles de intentos
+            st.markdown(f"""
+            <div style="text-align: center; font-size: 0.9em;">
+                <div>📋 Desde Pendientes: <strong>{intentos['desde_pendientes']}</strong></div>
+                <div>🔄 Desde No Contestó: <strong>{intentos['desde_no_contesto']}</strong></div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            # Estado de WhatsApp
+            if intentos['necesita_whatsapp']:
+                st.markdown("""
+                <div style="
+                    background: #ff4757;
+                    color: white;
+                    padding: 8px;
+                    border-radius: 8px;
+                    text-align: center;
+                    font-weight: bold;
+                ">
+                    📱 WhatsApp
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                faltantes = 3 - intentos['total_intentos']
+                st.markdown(f"""
+                <div style="
+                    background: #f1f2f6;
+                    color: #2f3542;
+                    padding: 8px;
+                    border-radius: 8px;
+                    text-align: center;
+                ">
+                    Faltan: {faltantes}
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Mensaje de WhatsApp si es necesario
+        if intentos['necesita_whatsapp']:
+            st.warning(f"""
+            📱 **¡RECORDATORIO IMPORTANTE!** 
+            Este usuario ya ha sido contactado {intentos['total_intentos']} veces.
+            **Se recomienda enviar un mensaje por WhatsApp** para continuar con la gestión.
+            """)
+        
+        # Historial detallado (collapsible)
+        if intentos['historial']:
+            with st.expander(f"📋 Historial de {intentos['total_intentos']} llamadas"):
+                for i, llamada in enumerate(intentos['historial'], 1):
+                    estado_emoji = "✅" if llamada['estado'] == "Llamado" else "❌"
+                    st.markdown(f"""
+                    **{i}.** {estado_emoji} {llamada['fecha']} - {llamada['estado']} 
+                    ({llamada['duracion']}s) - Agente: {llamada['agente']}
+                    """)
+        
+        return intentos
+        
+    except Exception as e:
+        print(f"[ERROR] Error mostrando contador de intentos: {e}")
+        st.error("Error mostrando contador de intentos")
+        return None
 
 def cargar_contactos_agente(cedula_agente):
     """Carga contactos desde Google Sheets filtrados por cedula_agente"""
@@ -2378,6 +2593,10 @@ with tab_op:
                         st.session_state.draft_notas[idx] = nota
 
                     with col2:
+                        # MOSTRAR CONTADOR DE INTENTOS PARA USUARIOS NO CONTESTADOS
+                        if c['estado'] == 'No Contesto':
+                            mostrar_contador_intentos(tel, st.session_state.agente_id)
+                        
                         if not st.session_state.en_pausa:
                             # Verificar si hay llamada activa (Conference o WebRTC)
                             llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
