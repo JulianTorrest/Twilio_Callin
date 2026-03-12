@@ -2954,10 +2954,11 @@ with tab_op:
                                 
                                 if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
                                     try:
-                                        # 🚨 INICIAR WEBRTC REAL (como en backup) - NO crear llamada Twilio directa
-                                        print(f"[DEBUG] Iniciando WebRTC - Activando para: {tel}")
+                                        # 🚨 INICIAR WEBRTC REAL (como en backup) - Actualizar número y activar
+                                        print(f"[DEBUG] Iniciando WebRTC - Actualizando número para: {tel}")
 
-                                        # Marcar WebRTC como activo y guardar datos
+                                        # Actualizar la variable númeroLlamar en el JavaScript
+                                        st.session_state.numero_a_llamar = tel
                                         st.session_state.webrtc_activo = True
                                         st.session_state.webrtc_numero = tel
                                         st.session_state.webrtc_nombre = c['nombre']
@@ -2965,7 +2966,7 @@ with tab_op:
                                         st.session_state.t_inicio_dt = datetime.now()
 
                                         add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
-                                        st.success(f"🎧 WebRTC activado - Espera a que aparezca 'Audio listo'")
+                                        st.success(f"🎧 WebRTC activado - Llamando a {c['nombre']}...")
                                         st.rerun()
 
                                     except Exception as e:
