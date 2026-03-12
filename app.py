@@ -2729,14 +2729,18 @@ with tab_op:
             console.log('📞 Iniciando llamada WebRTC a:', numero);
             
             try {{
-                // Usar params en lugar de To para enviar parámetros personalizados
+                // Usar params para enviar parámetros personalizados a la función unificada
                 const params = {{
                     params: {{
-                        phoneNumber: numero
-                    }}
+                        phoneNumber: numero,
+                        callType: 'webrtc'
+                    }},
+                    // Usar la función unificada hacer-llamada
+                    url: `{function_url}/hacer-llamada`
                 }};
                 
                 console.log('🔍 Parámetros enviados:', JSON.stringify(params));
+                console.log('🔍 Usando función unificada con WebRTC:', `{function_url}/hacer-llamada`);
                 currentConnection = await device.connect(params);
                 console.log('✅ Conexión establecida:', currentConnection);
                 
