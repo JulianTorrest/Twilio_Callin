@@ -1253,10 +1253,11 @@ def calcular_metricas_productividad(df_contactos, df_informe=None):
     no_contactados = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
     programados = len(df_contactos[df_contactos['estado'] == 'Programada'])
     pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
+    gestionados = len(df_contactos[df_contactos['estado'] == 'Gestionado'])  # Agregar contador de Gestionados
     
     # Tasa de contacto
-    gestionados = contactados + no_contactados
-    tasa_contacto = (contactados / gestionados * 100) if gestionados > 0 else 0
+    total_gestionados = contactados + no_contactados + gestionados  # Incluir Gestionados en el total
+    tasa_contacto = (contactados / total_gestionados * 100) if total_gestionados > 0 else 0
     
     # Duración promedio (si hay informe)
     duracion_promedio = 0
@@ -1292,6 +1293,7 @@ def calcular_metricas_productividad(df_contactos, df_informe=None):
         'no_contactados': no_contactados,
         'programados': programados,
         'pendientes': pendientes,
+        'gestionados': gestionados,  # Agregar gestionados al retorno
         'tasa_contacto': tasa_contacto,
         'duracion_promedio': duracion_promedio,
         'llamadas_hoy': llamadas_hoy,
@@ -1737,6 +1739,13 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                 "📅 Programadas", 
                 programadas,
                 delta=f"{((programadas/total_contactos)*100):.1f}% del total"
+            )
+        
+        with col5:
+            st.metric(
+                "🎯 Gestionados", 
+                llamados + no_contesto,
+                delta=f"{(((llamados + no_contesto)/total_contactos)*100):.1f}% del total"
             )
         
         # Gráfico de Tendencias Semanales Interactivo
@@ -2307,22 +2316,22 @@ with st.sidebar:
 
 # --- 5. MODULO DE METRICAS Y DASHBOARDS ---
 st.title("Dialer Pro Camacol")
-
-# --- CONTADORES Y BARRAS DE PROGRESO ---
 if st.session_state.df_contactos is not None:
     df = st.session_state.df_contactos
     
     # Contadores por categoría
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     total_pendientes = len(df[df['estado'] == 'Pendiente'])
     total_no_contestaron = len(df[df['estado'] == 'No Contesto'])
     total_programadas = len(df[df['estado'] == 'Programada'])
     total_llamados = len(df[df['estado'] == 'Llamado'])
+    total_gestionados = len(df[df['estado'] == 'Gestionado'])
     
     col1.metric("⏳ Pendientes", total_pendientes)
     col2.metric("📵 No Contestaron", total_no_contestaron)
     col3.metric("📅 Programadas", total_programadas)
     col4.metric("✅ Llamados", total_llamados)
+    col5.metric("🎯 Gestionados", total_gestionados)
     
     # Barras de progreso
     st.divider()
@@ -2331,7 +2340,7 @@ if st.session_state.df_contactos is not None:
     with prog_col1:
         # Barra de progreso total
         total_contactos = len(df)
-        total_gestionados = total_llamados + total_no_contestaron
+        total_gestionados = total_llamados + total_no_contestaron + total_gestionados
         progreso_total = (total_gestionados / total_contactos * 100) if total_contactos > 0 else 0
         st.write(f"**Progreso Total: {total_gestionados}/{total_contactos} ({progreso_total:.1f}%)**")
         st.progress(progreso_total / 100)
