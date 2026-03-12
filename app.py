@@ -3003,7 +3003,7 @@ with tab_op:
                                         # Crear TwiML para la conferencia (IGUAL para ambos como en backup)
                                         twiml_conference = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Dial>
+                                            <Dial callerId="{st.session_state.numero_celular_agente}">
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
