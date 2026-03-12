@@ -1736,16 +1736,9 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         
         with col4:
             st.metric(
-                "📅 Programadas", 
-                programadas,
-                delta=f"{((programadas/total_contactos)*100):.1f}% del total"
-            )
-        
-        with col5:
-            st.metric(
-                "🎯 Gestionados", 
-                llamados + no_contesto,
-                delta=f"{(((llamados + no_contesto)/total_contactos)*100):.1f}% del total"
+                "✅ Llamados", 
+                llamados,
+                delta=f"{((llamados/total_contactos)*100):.1f}% del total"
             )
         
         # Gráfico de Tendencias Semanales Interactivo
@@ -2320,18 +2313,16 @@ if st.session_state.df_contactos is not None:
     df = st.session_state.df_contactos
     
     # Contadores por categoría
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)  
     total_pendientes = len(df[df['estado'] == 'Pendiente'])
     total_no_contestaron = len(df[df['estado'] == 'No Contesto'])
     total_programadas = len(df[df['estado'] == 'Programada'])
-    total_llamados = len(df[df['estado'] == 'Llamado'])
     total_gestionados = len(df[df['estado'] == 'Gestionado'])
     
     col1.metric("⏳ Pendientes", total_pendientes)
     col2.metric("📵 No Contestaron", total_no_contestaron)
     col3.metric("📅 Programadas", total_programadas)
-    col4.metric("✅ Llamados", total_llamados)
-    col5.metric("🎯 Gestionados", total_gestionados)
+    col4.metric("🎯 Gestionados", total_gestionados)
     
     # Barras de progreso
     st.divider()
@@ -2340,7 +2331,7 @@ if st.session_state.df_contactos is not None:
     with prog_col1:
         # Barra de progreso total
         total_contactos = len(df)
-        total_gestionados = total_llamados + total_no_contestaron + total_gestionados
+        total_gestionados = total_no_contestaron + total_gestionados
         progreso_total = (total_gestionados / total_contactos * 100) if total_contactos > 0 else 0
         st.write(f"**Progreso Total: {total_gestionados}/{total_contactos} ({progreso_total:.1f}%)**")
         st.progress(progreso_total / 100)
