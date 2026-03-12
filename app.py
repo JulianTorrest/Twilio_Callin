@@ -4071,9 +4071,14 @@ with tab_op:
                                             nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
                                     else:
                                         nota_acumulada = nota  # Usar nueva nota si no existe nada
-                                    
+                                                    
                                     # Actualizar nota en DataFrame
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
+                                    
+                                    # DEBUG ANTES de guardar
+                                    print(f"[DEBUG GUARDAR_NOTAS] Antes de guardar - Estado del contacto: {st.session_state.df_contactos.at[idx, 'estado']}")
+                                    print(f"[DEBUG GUARDAR_NOTAS] Antes de guardar - cedula_agente: {st.session_state.df_contactos.at[idx, 'cedula_agente']}")
+                                    print(f"[DEBUG GUARDAR_NOTAS] Antes de guardar - Nombre: {c['nombre']}")
                                     
                                     # Actualizar Sheet Contactos para guardar permanentemente
                                     if URL_SHEET_CONTACTOS:
@@ -4081,13 +4086,20 @@ with tab_op:
                                             if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
                                                 add_log(f"NOTAS_GUARDADAS: {c['nombre']} - {len(nota_acumulada)} caracteres", "ACCION")
                                                 st.success("✅ Notas guardadas permanentemente")
+                                                print(f"[DEBUG GUARDAR_NOTAS] ✅ Sheet actualizado exitosamente")
                                             else:
                                                 st.warning("⚠️ Notas guardadas localmente, pero error actualizando Sheet")
+                                                print(f"[DEBUG GUARDAR_NOTAS] ❌ Error actualizando Sheet")
                                         except Exception as e:
                                             st.error(f"❌ Error guardando notas en Sheet: {e}")
                                             print(f"[ERROR] Guardar notas - Update Sheet: {e}")
                                     else:
                                         st.success("✅ Notas guardadas")
+                                        print(f"[DEBUG GUARDAR_NOTAS] ⚠️ Sin URL_SHEET_CONTACTOS")
+                                    
+                                    # DEBUG DESPUÉS de guardar
+                                    print(f"[DEBUG GUARDAR_NOTAS] Después de guardar - Estado del contacto: {st.session_state.df_contactos.at[idx, 'estado']}")
+                                    print(f"[DEBUG GUARDAR_NOTAS] Después de guardar - cedula_agente: {st.session_state.df_contactos.at[idx, 'cedula_agente']}")
                                     
                                     time.sleep(1)
                                     st.rerun()
