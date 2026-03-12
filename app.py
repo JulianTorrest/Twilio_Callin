@@ -2194,7 +2194,9 @@ def verificar_grabaciones_pendientes():
         print(f"[GRABACION] ❌ Error general verificando grabaciones: {e}")
         add_log(f"ERROR_GRABACIONES: {e}", "ERROR")
 
-# ... (rest of the code remains the same)
+# --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
+with st.sidebar:
+    st.header(f"Agente: {st.session_state.agente_id}")
     if st.session_state.numero_celular_agente:
         st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
     
