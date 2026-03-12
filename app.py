@@ -2645,12 +2645,43 @@ with tab_op:
                     console.log('✅ Twilio Device registrado');
                     updateStatus('🟢 Audio listo - WebRTC conectado');
                     
-                    // Si hay un número pendiente, llamar automáticamente
+                    // Si hay un número pendiente, llamar automáticamente con retry
                     if (numeroLlamar && numeroLlamar !== '') {{
                         console.log('🚀 Ejecutando llamada automática a:', numeroLlamar);
-                        setTimeout(function() {{
-                            llamarWebRTC(numeroLlamar);
-                        }}, 500);
+                        console.log('🔍 Verificando estado del device:', device);
+                        
+                        // Retry automático con múltiples intentos
+                        let retryCount = 0;
+                        const maxRetries = 3;
+                        
+                        function attemptCall() {{
+                            retryCount++;
+                            console.log(`📞 Intento de llamada ${{retryCount}}/${{maxRetries}}`);
+                            
+                            try {{
+                                if (device && device.state === 'registered') {{
+                                    console.log('✅ Device listo para llamar');
+                                    llamarWebRTC(numeroLlamar);
+                                }} else {{
+                                    console.log('⚠️ Device no está listo, reintentando...');
+                                    if (retryCount < maxRetries) {{
+                                        setTimeout(attemptCall, 1000);
+                                    }} else {{
+                                        console.error('❌ No se pudo realizar la llamada después de varios intentos');
+                                        updateStatus('🔴 Error: No se pudo iniciar la llamada');
+                                    }}
+                                }}
+                            }} catch(error) {{
+                                console.error('❌ Error al intentar llamar:', error);
+                                if (retryCount < maxRetries) {{
+                                    setTimeout(attemptCall, 1000);
+                                }}
+                            }}
+                        }}
+                        
+                        setTimeout(attemptCall, 500);
+                    }} else {{
+                        console.log('ℹ️ No hay número pendiente para llamar');
                     }}
                 }});
                 
@@ -2885,6 +2916,21 @@ with tab_op:
                         # MOSTRAR CONTADOR DE INTENTOS PARA USUARIOS NO CONTESTADOS
                         if c['estado'] == 'No Contesto':
                             mostrar_contador_intentos(tel, st.session_state.agente_id)
+                        
+                        # BOTÓN DE EMERGENCIA PARA LIMPIAR ESTADO WEBRTC
+                        if st.session_state.webrtc_activo and st.session_state.webrtc_idx == idx:
+                            st.error("🚨 ESTADO WEBRTC ATASCADO")
+                            if st.button("🔄 Forzar Finalización WebRTC", key=f"force_clear_{idx}"):
+                                print(f"[DEBUG] Forzando limpieza de estado WebRTC para idx={idx}")
+                                st.session_state.webrtc_activo = False
+                                st.session_state.webrtc_numero = None
+                                st.session_state.webrtc_nombre = None
+                                st.session_state.webrtc_call_sid = None
+                                st.session_state.webrtc_idx = None
+                                st.session_state.grabacion_pausada = False
+                                st.session_state.numero_a_llamar = ''
+                                st.success("✅ Estado WebRTC limpiado")
+                                st.rerun()
                         
                         if not st.session_state.en_pausa:
                             # Verificar si hay llamada activa (Conference o WebRTC)
