@@ -1921,8 +1921,12 @@ if 'agente_id' not in st.session_state:
         ced = st.text_input("Cédula:", type="password").strip()
         if st.form_submit_button("Entrar"):
             if ced in CEDULAS_AUTORIZADAS:
-                # Obtener número celular del agente desde secrets
-                numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
+                # Obtener número celular del agente desde secrets (forzar recarga)
+                numero_celular = dict(st.secrets.get("numeros_celular_agentes", {})).get(ced)
+                
+                # Debug: Mostrar qué número se está cargando
+                print(f"[DEBUG] Agente {ced} - Número cargado: {numero_celular}")
+                print(f"[DEBUG] Todos los números disponibles: {dict(st.secrets.get('numeros_celular_agentes', {}))}")
                 
                 if not numero_celular:
                     st.error(f"⚠️ No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
@@ -3025,6 +3029,23 @@ with tab_op:
                                         )
                                         
                                         # Esperar 1 segundo (reducido de 2) para asegurar que el agente entre primero
+                                        time.sleep(1)
+                                        
+                                        # Llamar al cliente con el MISMO TwiML (como en backup)
+                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
+                                        
+                                        call_cliente = client.calls.create(
+                                            twiml=twiml_conference,  # MISMO TwiML que el agente
+                                            to=tel,
+                                            from_=twilio_number,  # Usar número Twilio verificado
+                                            machine_detection='Enable',  # A nivel de API como en backup
+                                            status_callback=f"{function_url}/status",
+                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                        )
+                                        
+                                        # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
+                                        st.session_state.llamada_activa_sid = call_cliente.sid
+                                        st.session_state.conference_name = conference_name
                                         st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
                                         st.session_state.t_inicio_dt = datetime.now()
                                         print(f"[DEBUG] Conference creada: {conference_name}")
