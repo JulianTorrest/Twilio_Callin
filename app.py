@@ -2281,9 +2281,16 @@ with tab_op:
         st.markdown("### 🔍 Búsqueda Avanzada")
         search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
         
-        opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True)
+        opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True, key="pestana_opciones")
         # Lógica de mapeo de pestaña a estado del DF
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
+        
+        # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
+        if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
+            # Forzar selección de la pestaña "Programadas"
+            st.session_state.pestana_opciones = "Programadas"
+            # Limpiar el estado de redirección
+            del st.session_state.pestana_actual
         
         # Filtrado riguroso
         if "Gestionadas" in opc:
@@ -2355,12 +2362,55 @@ with tab_op:
                             try:
                                 fecha_prog = pd.to_datetime(c['proxima_llamada'])
                                 fecha_formateada = fecha_prog.strftime("%Y-%m-%d %H:%M")
-                                st.markdown(f"""
-                                <div style="background-color: #e3f2fd; padding: 10px; border-radius: 8px; border-left: 4px solid #2196f3; margin-bottom: 10px;">
-                                    <strong>📅 Programado para:</strong> {fecha_formateada}<br>
-                                    <small>⏰ Faltan {(fecha_prog - datetime.now()).total_seconds() / 3600:.1f} horas</small>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                ahora = obtener_hora_bogota()
+                                tiempo_restante = fecha_prog - ahora
+                                
+                                # MENSAJE MÁS VISIBLE Y DETALLADO
+                                if tiempo_restante.total_seconds() > 0:
+                                    dias_restantes = int(tiempo_restante.total_seconds() / 86400)
+                                    horas_restantes = int((tiempo_restante.total_seconds() % 86400) / 3600)
+                                    minutos_restantes = int((tiempo_restante.total_seconds() % 3600) / 60)
+                                    
+                                    if dias_restantes > 0:
+                                        tiempo_texto = f"en {dias_restantes} día(s), {horas_restantes}h {minutos_restantes}m"
+                                    elif horas_restantes > 0:
+                                        tiempo_texto = f"en {horas_restantes}h {minutos_restantes}m"
+                                    else:
+                                        tiempo_texto = f"en {minutos_restantes} minutos"
+                                    
+                                    st.markdown(f"""
+                                    <div style="background: linear-gradient(135deg, #2196f3, #1976d2); color: white; padding: 15px; border-radius: 10px; border-left: 5px solid #0d47a1; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);">
+                                        <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                                            <span style="font-size: 24px; margin-right: 10px;">📅</span>
+                                            <strong style="font-size: 16px;">LLAMADA PROGRAMADA</strong>
+                                        </div>
+                                        <div style="font-size: 14px; margin-bottom: 5px;">
+                                            <strong>📞 Fecha y hora:</strong> {fecha_formateada}
+                                        </div>
+                                        <div style="font-size: 14px; margin-bottom: 5px;">
+                                            <strong>⏰ Realizar llamada:</strong> {tiempo_texto}
+                                        </div>
+                                        <div style="font-size: 12px; opacity: 0.9;">
+                                            <small>📍 Zona horaria: Bogotá (UTC-5)</small>
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                else:
+                                    # LLAMADA ATRASADA
+                                    st.markdown(f"""
+                                    <div style="background: linear-gradient(135deg, #ff6b6b, #ff4444); color: white; padding: 15px; border-radius: 10px; border-left: 5px solid #cc0000; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);">
+                                        <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                                            <span style="font-size: 24px; margin-right: 10px;">⚠️</span>
+                                            <strong style="font-size: 16px;">LLAMADA ATRASADA</strong>
+                                        </div>
+                                        <div style="font-size: 14px; margin-bottom: 5px;">
+                                            <strong>📞 Programada para:</strong> {fecha_formateada}
+                                        </div>
+                                        <div style="font-size: 14px;">
+                                            <strong>🔴 Debió realizarse hace:</strong> {abs(tiempo_restante.total_seconds() / 3600):.1f} horas
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                             except Exception as e:
                                 st.info(f"📅 Programado para: {c['proxima_llamada']}")
                         
@@ -3431,6 +3481,10 @@ with tab_op:
                                             if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
                                                 add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
                                                 st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} con seguridad")
+                                                # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS"
+                                                st.session_state.pestana_actual = "Programadas"
+                                                time.sleep(1)
+                                                st.rerun()
                                             else:
                                                 st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
                                         except Exception as e:
@@ -3438,6 +3492,10 @@ with tab_op:
                                             print(f"[ERROR] Programar llamada - Update Sheet: {e}")
                                     else:
                                         st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                        # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" (incluso sin Sheet)
+                                        st.session_state.pestana_actual = "Programadas"
+                                        time.sleep(1)
+                                        st.rerun()
                                     
                                     time.sleep(1)
                                     st.rerun()
