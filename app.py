@@ -2630,8 +2630,7 @@ with tab_op:
     components.html(twilio_webrtc_component, height=50)
 
 with tab_op:
-    # Verificar grabaciones pendientes en segundo plano
-    verificar_grabaciones_pendientes()
+    # NOTA: Las verificaciones de grabaciones y transcripciones se ejecutan en segundo plano (línea 2388)
     
     if st.session_state.df_contactos is not None:
         df = st.session_state.df_contactos
