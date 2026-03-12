@@ -1645,20 +1645,23 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                     dia_informe = pd.DataFrame()  # DataFrame vacío si no hay la columna
                 
                 if not dia_informe.empty:
-                    llamadas_dia = dia_informe['llamadas_efectivas'].sum()
-                    no_contesto_dia = dia_informe['no_contesto'].sum()
-                    duracion_promedio = dia_informe['duracion_promedio'].mean()
+                    # Usar columnas reales del Sheet Informe
+                    llamadas_efectivas_dia = len(dia_informe[dia_informe['estado'] == 'Llamado'])
+                    no_contesto_dia = len(dia_informe[dia_informe['estado'] == 'No Contesto'])
+                    # Calcular duración promedio desde duracion_seg
+                    duraciones = pd.to_numeric(dia_informe['duracion_seg'], errors='coerce')
+                    duracion_promedio = duraciones.mean() if not duraciones.empty else 0
                 else:
-                    llamadas_dia = 0
+                    llamadas_efectivas_dia = 0
                     no_contesto_dia = 0
                     duracion_promedio = 0
                 
                 datos_semanales.append({
                     'dia': dia_semana,
                     'fecha': fecha.strftime('%Y-%m-%d'),
-                    'llamadas': llamadas_dia,
+                    'llamadas': llamadas_efectivas_dia,
                     'no_contesto': no_contesto_dia,
-                    'tasa_respuesta': (llamadas_dia / (llamadas_dia + no_contesto_dia) * 100) if (llamadas_dia + no_contesto_dia) > 0 else 0,
+                    'tasa_respuesta': (llamadas_efectivas_dia / (llamadas_efectivas_dia + no_contesto_dia) * 100) if (llamadas_efectivas_dia + no_contesto_dia) > 0 else 0,
                     'duracion_promedio': duracion_promedio
                 })
         else:
