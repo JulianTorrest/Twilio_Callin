@@ -2212,12 +2212,49 @@ def verificar_grabaciones_pendientes():
     # Botón para recargar contactos desde Google Sheets
     if st.button("🔄 Recargar Contactos"):
         with st.spinner("Recargando contactos..."):
-            st.session_state.df_contactos = cargar_contactos_agente(st.session_state.agente_id)
-            if not st.session_state.df_contactos.empty:
+            print(f"[DEBUG] 🔄 Botón Recargar Contactos presionado")
+            print(f"[DEBUG] 📋 Agente ID: {st.session_state.agente_id}")
+            
+            # Limpiar caché de spreadsheets forzando recarga completa
+            if 'spreadsheet_contactos' in st.session_state:
+                del st.session_state.spreadsheet_contactos
+                print(f"[DEBUG] 🗑️ Caché spreadsheet_contactos eliminado")
+            
+            # Cargar contactos frescos
+            df_recargado = cargar_contactos_agente(st.session_state.agente_id)
+            print(f"[DEBUG] 📊 Contactos recargados: {len(df_recargado)}")
+            print(f"[DEBUG] 📋 Columnas: {list(df_recargado.columns) if not df_recargado.empty else 'DataFrame vacío'}")
+            
+            if not df_recargado.empty:
+                st.session_state.df_contactos = df_recargado
                 add_log(f"CONTACTOS_RECARGADOS: {len(st.session_state.df_contactos)} contactos", "DATA")
                 st.success(f"✅ {len(st.session_state.df_contactos)} contactos cargados")
+                print(f"[DEBUG] ✅ Contactos cargados exitosamente en session_state")
             else:
                 st.warning("⚠️ No hay contactos asignados a tu cédula")
+                print(f"[DEBUG] ⚠️ DataFrame vacío retornado por cargar_contactos_agente")
+                
+                # Debug adicional: mostrar qué hay en el sheet
+                try:
+                    rate_limiter.check_and_wait(operation_type="read")
+                    spreadsheet_contactos = get_spreadsheet_contactos()
+                    worksheet = spreadsheet_contactos.get_worksheet(0)
+                    data = worksheet.get_all_values()
+                    print(f"[DEBUG] 📊 Total filas en sheet: {len(data)}")
+                    if len(data) > 1:
+                        df_todos = pd.DataFrame(data[1:], columns=data[0])
+                        print(f"[DEBUG] 📋 Total contactos en sheet: {len(df_todos)}")
+                        if 'cedula_agente' in df_todos.columns:
+                            contactos_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(st.session_state.agente_id)]
+                            print(f"[DEBUG] 🎯 Contactos encontrados para agente {st.session_state.agente_id}: {len(contactos_agente)}")
+                            if not contactos_agente.empty:
+                                print(f"[DEBUG] 📝 Primer contacto encontrado: {contactos_agente.iloc[0].to_dict()}")
+                        else:
+                            print(f"[DEBUG] ❌ Columna 'cedula_agente' no encontrada en sheet")
+                            print(f"[DEBUG] 📋 Columnas disponibles: {list(df_todos.columns)}")
+                except Exception as e_debug:
+                    print(f"[DEBUG] ❌ Error en debug adicional: {e_debug}")
+            
             time.sleep(1)
             st.rerun()
 
