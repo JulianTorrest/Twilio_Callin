@@ -3037,7 +3037,7 @@ with tab_op:
                                         call_cliente = client.calls.create(
                                             twiml=twiml_conference,  # MISMO TwiML que el agente
                                             to=tel,
-                                            from_=twilio_number,  # Usar número Twilio verificado
+                                            from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
                                             machine_detection='Enable',  # A nivel de API como en backup
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
