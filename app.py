@@ -4058,8 +4058,15 @@ with tab_op:
                             col_btn1, col_btn2 = st.columns(2)
                             with col_btn1:
                                 if st.button("💾 Guardar Notas", key=f"save_notes_{idx}", use_container_width=True):
+                                    # DEBUG INMEDIATO al presionar el botón
+                                    print(f"[DEBUG GUARDAR_NOTAS] 🔄 Botón presionado - idx: {idx}")
+                                    print(f"[DEBUG GUARDAR_NOTAS] 🔄 Contacto: {c['nombre']}")
+                                    print(f"[DEBUG GUARDAR_NOTAS] 🔄 Estado actual: {st.session_state.df_contactos.at[idx, 'estado']}")
+                                    
                                     # Obtener nota existente
                                     nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
+                                    print(f"[DEBUG GUARDAR_NOTAS] 🔄 Nota existente: '{nota_existente}'")
+                                    print(f"[DEBUG GUARDAR_NOTAS] 🔄 Nota nueva: '{nota}'")
                                     
                                     # Combinar notas si ya existe algo
                                     if nota_existente and nota_existente.strip():
@@ -4067,10 +4074,13 @@ with tab_op:
                                             # Acumular notas con timestamp
                                             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                                             nota_acumulada = f"{nota_existente} | [{timestamp}] {nota}"
+                                            print(f"[DEBUG GUARDAR_NOTAS] 🔄 Notas acumuladas: '{nota_acumulada}'")
                                         else:
                                             nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
+                                            print(f"[DEBUG GUARDAR_NOTAS] 🔄 Nota existente mantenida")
                                     else:
                                         nota_acumulada = nota  # Usar nueva nota si no existe nada
+                                        print(f"[DEBUG GUARDAR_NOTAS] 🔄 Nota nueva usada")
                                                     
                                     # Actualizar nota en DataFrame
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
