@@ -2869,7 +2869,9 @@ with tab_op:
                         
                         if not st.session_state.en_pausa:
                             # Verificar si hay llamada activa (Conference o WebRTC)
-                            llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
+                            conference_activo = st.session_state.llamada_activa_sid is not None and st.session_state.get('conference_idx') == idx
+                            webrtc_activo = st.session_state.webrtc_activo and st.session_state.webrtc_idx == idx
+                            llamada_activa = conference_activo or webrtc_activo
                             
                             if not llamada_activa:
                                 # Botón único de llamada con Conference Call (ACTIVO)
@@ -2952,23 +2954,8 @@ with tab_op:
                                 
                                 if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
                                     try:
-                                        # 🚨 INICIAR LLAMADA REAL A TWILIO (como Conference Call)
-                                        print(f"[DEBUG] Iniciando WebRTC - Llamando a: {tel}")
-
-                                        # Crear llamada directa al cliente
-                                        call_webrtc = client.calls.create(
-                                            to=tel,
-                                            from_=twilio_number,
-                                            machine_detection='Enable',
-                                            record=True,
-                                            url=function_url,  # Usar url en lugar de status_callback
-                                            status_callback=f"{function_url}/dial-status",
-                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                        )
-
-                                        # Guardar SID de la llamada
-                                        st.session_state.webrtc_call_sid = call_webrtc.sid
-                                        print(f"[DEBUG] WebRTC Call SID creado: {call_webrtc.sid}")
+                                        # 🚨 INICIAR WEBRTC REAL (como en backup) - NO crear llamada Twilio directa
+                                        print(f"[DEBUG] Iniciando WebRTC - Activando para: {tel}")
 
                                         # Marcar WebRTC como activo y guardar datos
                                         st.session_state.webrtc_activo = True
@@ -2977,13 +2964,13 @@ with tab_op:
                                         st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
                                         st.session_state.t_inicio_dt = datetime.now()
 
-                                        add_log(f"WEBRTC_START: {c['nombre']} - {tel} - SID: {call_webrtc.sid}", "TWILIO")
-                                        st.success(f"✅ Llamada WebRTC iniciada - SID: {call_webrtc.sid[:8]}...")
+                                        add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
+                                        st.success(f"🎧 WebRTC activado - Espera a que aparezca 'Audio listo'")
                                         st.rerun()
 
                                     except Exception as e:
-                                        st.error(f"Error al iniciar llamada WebRTC: {e}")
-                                        print(f"[ERROR] Error en WebRTC call: {e}")
+                                        st.error(f"Error al iniciar WebRTC: {e}")
+                                        print(f"[ERROR] Error en WebRTC: {e}")
                                         import traceback
                                         print(traceback.format_exc())
 
@@ -3135,24 +3122,29 @@ with tab_op:
                                             print(f"[ERROR] Error verificando estado WebRTC: {e}")
                                     
                                     # Botones en columnas (SIEMPRE mostrar durante llamada activa)
+                                    st.markdown("### 🎛️ Control de Llamada")
+                                    btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
+                                    
                                     finalizar_webrtc = False
                                     pausar_webrtc = False
                                     
-                                    if not call_ended_by_remote:
-                                        btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
-                                        
-                                        with btn_webrtc_col1:
-                                            finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
-                                        
-                                        with btn_webrtc_col2:
-                                            if not st.session_state.grabacion_pausada:
-                                                pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
-                                            else:
-                                                st.info("🔴 Grabación pausada")
-                                    else:
-                                        # Si la llamada terminó remotamente, marcar para finalizar automáticamente
-                                        finalizar_webrtc = True
+                                    with btn_webrtc_col1:
+                                        if st.button("✅ FINALIZAR GESTIÓN", type="primary", key=f"fin_webrtc_{idx}", use_container_width=True):
+                                            finalizar_webrtc = True
                                     
+                                    with btn_webrtc_col2:
+                                        if not st.session_state.grabacion_pausada:
+                                            if st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}", use_container_width=True):
+                                                pausar_webrtc = True
+                                        else:
+                                            st.info("🔴 Grabación pausada")
+                                    
+                                    # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                    if call_ended_by_remote:
+                                        finalizar_webrtc = True
+                                        st.warning("📞 Llamada terminada remotamente - Finalizando gestión...")
+                                        
+                                    # Manejar pausa de grabación
                                     if pausar_webrtc:
                                         # Calcular duración hasta el momento
                                         dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
@@ -3171,49 +3163,6 @@ with tab_op:
                                             finalizar_webrtc = True
                                             st.success("📞 Finalizando llamada para guardar grabación...")
                                             st.rerun()
-                                        
-                                        # Opción: Pausar la grabación en Twilio si tenemos el SID
-                                        if st.session_state.webrtc_call_sid:
-                                            print(f"[DEBUG] Intentando pausar grabación {st.session_state.webrtc_call_sid}...")
-                                            try:
-                                                # Primero verificar si existe la grabación
-                                                recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
-                                                print(f"[DEBUG] Grabaciones encontradas: {len(recordings)}")
-                                                
-                                                if recordings:
-                                                    recording = recordings[0]
-                                                    print(f"[DEBUG] Grabación SID: {recording.sid}")
-                                                    print(f"[DEBUG] Grabación Status: {recording.status}")
-                                                    print(f"[DEBUG] Grabación Duration: {recording.duration}")
-                                                    
-                                                    # Intentar pausar
-                                                    print(f"[DEBUG] Intentando pausar grabación {recording.sid}...")
-                                                    client.recordings(recording.sid).update(status='paused')
-                                                    print(f"[DEBUG] ✅ Grabación pausada exitosamente")
-                                                    st.success("⏸️ Grabación pausada en Twilio")
-                                                else:
-                                                    print(f"[DEBUG] ⚠️ No se encontraron grabaciones activas para {st.session_state.webrtc_call_sid}")
-                                                    st.warning("⚠️ No hay grabación activa para pausar")
-                                                    
-                                                # Guardar en Sheet Informe con estado "Grabación Pausada"
-                                                if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.webrtc_call_sid or ''):
-                                                    st.session_state.grabacion_pausada = True
-                                                    add_log(f"WEBRTC_GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
-                                                    st.success("✅ Grabación pausada y guardada en Sheet Informe")
-                                                else:
-                                                    st.error("❌ Error guardando en Sheet Informe")
-                                                    
-                                            except Exception as e:
-                                                print(f"[ERROR] Error pausando grabación WebRTC: {e}")
-                                                import traceback
-                                                print(f"[ERROR] Traceback: {traceback.format_exc()}")
-                                                st.error(f"❌ Error pausando grabación: {e}")
-                                        else:
-                                            print(f"[DEBUG] ⚠️ No hay webrtc_call_sid disponible")
-                                            st.warning("⚠️ No hay SID de llamada WebRTC disponible")
-                                        
-                                        time.sleep(1)
-                                        st.rerun()
                                     
                                     # Manejar finalización de WebRTC (manual o automática)
                                     if finalizar_webrtc or call_ended_by_remote:
