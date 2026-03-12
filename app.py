@@ -2961,7 +2961,8 @@ with tab_op:
                                             from_=twilio_number,
                                             machine_detection='Enable',
                                             record=True,
-                                            status_callback=f"{function_url}/status",
+                                            url=function_url,  # Usar url en lugar de status_callback
+                                            status_callback=f"{function_url}/dial-status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
 
@@ -2986,23 +2987,17 @@ with tab_op:
                                         import traceback
                                         print(traceback.format_exc())
 
-                                # --- OPCIÓN 1: Botón Server-Side (COMENTADO - No sirve para audio bidireccional) ---
-                                # if st.button("📞 LLAMAR (Server)", use_container_width=True, key=f"call_server_{idx}"):
-                                #     try:
-                                #         call = client.calls.create(
-                                #             url=function_url, 
-                                #             to=tel, 
-                                #             from_=twilio_number, 
-                                #             machine_detection='Enable', 
-                                #             record=True
-                                #         )
-                                #         st.session_state.llamada_activa_sid = call.sid
-                                #         st.session_state.t_inicio_dt = datetime.now()
+                                # --- MONITOREO DE LLAMADA WEBRTC ACTIVA ---
+                                elif st.session_state.webrtc_activo and st.session_state.webrtc_idx == idx:
                                     # Monitor para WebRTC
-                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                    minutos = tiempo_transcurrido // 60
-                                    segundos = tiempo_transcurrido % 60
-                                    st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                    if st.session_state.t_inicio_dt is not None:
+                                        tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                        minutos = tiempo_transcurrido // 60
+                                        segundos = tiempo_transcurrido % 60
+                                        st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                    else:
+                                        st.markdown("### ⏱️ Tiempo: 00:00")
+                                    
                                     st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
                                     
                                     # 📊 MOSTRAR CONTADOR DE INTENTOS DURANTE WEBRTC (como Conference)
