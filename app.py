@@ -3025,23 +3025,6 @@ with tab_op:
                                         )
                                         
                                         # Esperar 1 segundo (reducido de 2) para asegurar que el agente entre primero
-                                        time.sleep(1)
-                                        
-                                        # Llamar al cliente con el MISMO TwiML (como en backup)
-                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
-                                        
-                                        call_cliente = client.calls.create(
-                                            twiml=twiml_conference,  # MISMO TwiML que el agente
-                                            to=tel,
-                                            from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
-                                            machine_detection='Enable',  # A nivel de API como en backup
-                                            status_callback=f"{function_url}/status",
-                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                        )
-                                        
-                                        # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
-                                        st.session_state.llamada_activa_sid = call_cliente.sid
-                                        st.session_state.conference_name = conference_name
                                         st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
                                         st.session_state.t_inicio_dt = datetime.now()
                                         print(f"[DEBUG] Conference creada: {conference_name}")
