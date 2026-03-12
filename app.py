@@ -4074,7 +4074,21 @@ with tab_op:
                                     
                                     # Actualizar nota en DataFrame
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
-                                    st.success("✅ Notas guardadas")
+                                    
+                                    # Actualizar Sheet Contactos para guardar permanentemente
+                                    if URL_SHEET_CONTACTOS:
+                                        try:
+                                            if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                                add_log(f"NOTAS_GUARDADAS: {c['nombre']} - {len(nota_acumulada)} caracteres", "ACCION")
+                                                st.success("✅ Notas guardadas permanentemente")
+                                            else:
+                                                st.warning("⚠️ Notas guardadas localmente, pero error actualizando Sheet")
+                                        except Exception as e:
+                                            st.error(f"❌ Error guardando notas en Sheet: {e}")
+                                            print(f"[ERROR] Guardar notas - Update Sheet: {e}")
+                                    else:
+                                        st.success("✅ Notas guardadas")
+                                    
                                     time.sleep(1)
                                     st.rerun()
                             
