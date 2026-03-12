@@ -536,6 +536,67 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         print(traceback.format_exc())
         return False
 
+def update_sheet_selective(df, worksheet_name="0", sheet_url=None, index_col='telefono'):
+    """Actualiza filas específicas en Google Sheets sin sobrescribir otros datos
+    
+    Args:
+        df: DataFrame con las filas a actualizar
+        worksheet_name: Nombre o índice del worksheet (default "0")
+        sheet_url: URL del Google Sheet
+        index_col: Columna usada como identificador único para matching
+    
+    Returns:
+        bool: True si la actualización fue exitosa
+    """
+    try:
+        # Verificar rate limit antes de operar
+        rate_limiter.check_and_wait(operation_type="read")
+        
+        # Determinar qué spreadsheet usar
+        if sheet_url:
+            rate_limiter.check_and_wait(operation_type="read")
+            target_spreadsheet = gc.open_by_url(sheet_url)
+        else:
+            target_spreadsheet = get_spreadsheet_informe()
+        
+        # Obtener el worksheet
+        worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
+        
+        # Leer datos existentes
+        existing_data = worksheet.get_all_records()
+        existing_df = pd.DataFrame(existing_data)
+        
+        if existing_df.empty:
+            # Si no hay datos, escribir todo el DataFrame
+            rate_limiter.check_and_wait(operation_type="write")
+            worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+            return True
+        
+        # Actualizar filas específicas basadas en el índice
+        for idx, row in df.iterrows():
+            if index_col in row and pd.notna(row[index_col]):
+                # Buscar fila existente con el mismo valor en index_col
+                mask = existing_df[index_col] == row[index_col]
+                if mask.any():
+                    # Actualizar fila existente
+                    existing_idx = existing_df[mask].index[0]
+                    for col in df.columns:
+                        if col in existing_df.columns:
+                            existing_df.at[existing_idx, col] = row[col]
+                else:
+                    # Agregar nueva fila
+                    new_row = {col: row[col] for col in df.columns if col in existing_df.columns}
+                    existing_df = pd.concat([existing_df, pd.DataFrame([new_row])], ignore_index=True)
+        
+        # Escribir DataFrame actualizado
+        rate_limiter.check_and_wait(operation_type="write")
+        worksheet.update([existing_df.columns.values.tolist()] + existing_df.values.tolist())
+        return True
+        
+    except Exception as e:
+        print(f"Error en update_sheet_selective: {e}")
+        return False
+
 def contar_intentos_llamada(telefono, agente_id=None):
     """
     Cuenta los intentos de llamada para un número específico desde Sheet Informe
@@ -752,7 +813,15 @@ def mostrar_contador_intentos(telefono, agente_id):
         return None
 
 def cargar_contactos_agente(cedula_agente):
-    """Carga contactos desde Google Sheets filtrados por cedula_agente"""
+    """
+    Carga contactos desde Google Sheets filtrados por cedula_agente
+    
+    Args:
+        cedula_agente: Cédula del agente
+    
+    Returns:
+        pd.DataFrame: DataFrame con los contactos del agente
+    """
     try:
         # Leer todos los contactos del Sheet con rate limiting
         rate_limiter.check_and_wait(operation_type="read")
@@ -2658,8 +2727,8 @@ with tab_op:
         
         # Filtrado riguroso
         if "Gestionadas" in opc:
-            # Para "Gestionadas": mostrar contactos que contestaron la llamada (solo 'Llamado')
-            df_work = df[df['estado'] == 'Llamado']
+            # Para "Gestionadas": mostrar contactos gestionados (estado 'Gestionado')
+            df_work = df[df['estado'] == 'Gestionado']
         else:
             df_work = df[df['estado'] == f_est]
         
