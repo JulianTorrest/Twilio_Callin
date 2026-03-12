@@ -2747,14 +2747,15 @@ with tab_op:
                 // Eventos del Call object
                 currentConnection.on('accept', function() {{
                     console.log('✅ Llamada aceptada/conectada');
+                    updateStatus('🟢 Llamada conectada');
                 }});
                 
                 currentConnection.on('disconnect', function() {{
                     console.log('📴 Llamada finalizada - Limpiando estado automáticamente');
                     currentConnection = null;
+                    updateStatus('🔴 Llamada finalizada');
                     
                     // Notificar a Streamlit que la llamada terminó
-                    // Esto limpiará el estado webrtc_activo automáticamente
                     setTimeout(function() {{
                         if (window.parent && window.parent.postMessage) {{
                             window.parent.postMessage({{
@@ -2766,13 +2767,52 @@ with tab_op:
                 }});
                 
                 currentConnection.on('error', function(error) {{
-                    console.error('❌ Error en llamada:', error);
-                    alert('❌ Error: ' + error.message);
+                    console.error('❌ Error en llamada WebRTC:', error);
+                    updateStatus('🔴 Error: ' + (error.message || 'Error desconocido'));
+                    currentConnection = null;
+                    
+                    // Limpiar estado automáticamente en caso de error
+                    setTimeout(function() {{
+                        if (window.parent && window.parent.postMessage) {{
+                            window.parent.postMessage({{
+                                type: 'webrtc_error',
+                                error: error.message || 'Error desconocido',
+                                timestamp: new Date().toISOString()
+                            }}, '*');
+                        }}
+                    }}, 100);
                 }});
                 
                 currentConnection.on('reject', function() {{
                     console.log('❌ Llamada rechazada');
+                    updateStatus('🔴 Llamada rechazada');
                     currentConnection = null;
+                    
+                    // Limpiar estado automáticamente en caso de rechazo
+                    setTimeout(function() {{
+                        if (window.parent && window.parent.postMessage) {{
+                            window.parent.postMessage({{
+                                type: 'webrtc_reject',
+                                timestamp: new Date().toISOString()
+                            }}, '*');
+                        }}
+                    }}, 100);
+                }});
+                
+                currentConnection.on('cancel', function() {{
+                    console.log('❌ Llamada cancelada');
+                    updateStatus('🔴 Llamada cancelada');
+                    currentConnection = null;
+                    
+                    // Limpiar estado automáticamente en caso de cancelación
+                    setTimeout(function() {{
+                        if (window.parent && window.parent.postMessage) {{
+                            window.parent.postMessage({{
+                                type: 'webrtc_cancel',
+                                timestamp: new Date().toISOString()
+                            }}, '*');
+                        }}
+                    }}, 100);
                 }});
                 
             }} catch(error) {{
@@ -2981,9 +3021,7 @@ with tab_op:
                                             from_=twilio_number,
                                             status_callback=f"{function_url}/agent-status",
                                             status_callback_method="POST",
-                                            status_callback_event=['answered'],  # Solo cuando contesta
-                                            # Pasar datos del cliente para llamar automáticamente
-                                            application_sid=tel  # Usar como identificador temporal
+                                            status_callback_event=['answered']  # Solo cuando contesta
                                         )
                                         
                                         # Esperar 1 segundo (reducido de 2) para asegurar que el agente entre primero
