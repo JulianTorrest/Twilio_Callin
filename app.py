@@ -2336,9 +2336,15 @@ if st.session_state.df_contactos is not None:
     st.divider()
 
 try:
-    # Leemos con gspread
-    df_historico = read_sheet("0")
-except:
+    # Leemos con gspread con manejo robusto de errores
+    try:
+        df_historico = read_sheet("0")
+    except Exception as e:
+        print(f"[ERROR] Error leyendo histórico: {e}")
+        st.warning("⚠️ Error conectando con Google Sheets - Modo offline activado")
+        df_historico = pd.DataFrame()
+except Exception as e:
+    print(f"[ERROR] Error general: {e}")
     df_historico = pd.DataFrame()
 
 tab_op, tab_met, tab_reportes, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "📈 Reportes", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
@@ -2651,6 +2657,19 @@ with tab_op:
                 device.on('error', function(error) {{
                     console.error('❌ Error Twilio Device:', error);
                     updateStatus('🔴 Error: ' + (error.message || 'Error desconocido'));
+                    
+                    // Manejo específico para ConnectionDisconnected
+                    if (error.code === 53001 || error.message.includes('ConnectionDisconnected')) {{
+                        console.log('🔄 Conexión perdida, intentando reconectar...');
+                        updateStatus('🔄 Reconectando...');
+                        setTimeout(initTwilioDevice, 3000); // Reconectar después de 3 segundos
+                    }}
+                }});
+                
+                device.on('offline', function(device) {{
+                    console.log('📴 Device offline - Conexión perdida');
+                    updateStatus('🔴 Sin conexión - Reintentando...');
+                    setTimeout(initTwilioDevice, 5000); // Reconectar después de 5 segundos
                 }});
                 
                 device.on('incoming', function(call) {{
@@ -3007,23 +3026,9 @@ with tab_op:
                                             faltantes = 3 - intentos_webrtc['total_intentos']
                                             st.markdown(f"<div>Faltan: {faltantes}</div>", unsafe_allow_html=True)
                                     
-                                    # Buscar el SID de llamada WebRTC si no lo tenemos
-                                    if st.session_state.webrtc_call_sid is None:
-                                        try:
-                                            # Buscar llamadas activas al número del cliente
-                                            calls = client.calls.list(
-                                                to=tel,
-                                                status='in-progress',
-                                                limit=1
-                                            )
-                                            if calls:
-                                                st.session_state.webrtc_call_sid = calls[0].sid
-                                                # Actualizar el tiempo de inicio cuando la llamada realmente se conecta
-                                                st.session_state.t_inicio_dt = datetime.now()
-                                                print(f"[DEBUG] WebRTC Call SID encontrado: {calls[0].sid}")
-                                                st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
-                                        except Exception as e:
-                                            print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
+                                    # WebRTC real no necesita buscar SID de llamada Twilio
+                                    # La llamada se maneja completamente desde el navegador
+                                    st.session_state.webrtc_call_sid = None
                                     
                                     # Verificar si la llamada sigue activa en Twilio
                                     call_ended_by_remote = False
