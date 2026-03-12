@@ -3931,3 +3931,45 @@ with tab_op:
                                             nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
                                     else:
                                         nota_acumulada = nota  # Usar nueva nota si no existe nada
+                                    
+                                    # Actualizar nota en DataFrame
+                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
+                                    st.success("✅ Notas guardadas")
+                                    time.sleep(1)
+                                    st.rerun()
+                            
+                            with col_btn2:
+                                if st.button("✅ Programar", key=f"prog_{idx}", use_container_width=True):
+                                    # Combinar fecha y hora
+                                    fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                                    
+                                    # Validar que la fecha sea futura
+                                    if fecha_hora_prog <= hora_bogota_actual:
+                                        st.error("⚠️ La fecha y hora deben ser futuras")
+                                    else:
+                                        # Actualizar DataFrame local
+                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
+                                        st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
+                                        st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                                        st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+                                        
+                                        # Actualizar Sheet Llamadas
+                                        if URL_SHEET_CONTACTOS:
+                                            try:
+                                                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
+                                                    add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                                                    st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                                else:
+                                                    st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
+                                            except Exception as e:
+                                                st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
+                                                print(f"[ERROR] Programar llamada - Update Sheet: {e}")
+                                        else:
+                                            st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                        
+                                        time.sleep(1)
+                                        st.rerun()
+        else:
+            st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
+    else:
+        st.info("Por favor, cargue un archivo CSV en el sidebar para comenzar la operación.")
