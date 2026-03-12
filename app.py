@@ -2287,10 +2287,17 @@ with tab_op:
         
         # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
         if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
-            # Forzar selección de la pestaña "Programadas"
-            st.session_state.pestana_opciones = "Programadas"
+            # Usar variable de control separada (no modificar st.radio directamente)
+            st.session_state.redireccionar_a_programadas = True
             # Limpiar el estado de redirección
             del st.session_state.pestana_actual
+        
+        # 🔥 APLICAR REDIRECCIÓN SI ES NECESARIO
+        if hasattr(st.session_state, 'redireccionar_a_programadas') and st.session_state.redireccionar_a_programadas:
+            # Forzar la pestaña "Programadas" usando la lógica de mapeo
+            f_est = "Programada"
+            # Limpiar el estado de redirección
+            del st.session_state.redireccionar_a_programadas
         
         # Filtrado riguroso
         if "Gestionadas" in opc:
