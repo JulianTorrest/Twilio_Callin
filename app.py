@@ -464,19 +464,11 @@ class RateLimiter:
         # Log de debug
         if current_usage % 10 == 0 and current_usage > 0:
             print(f"[RATE LIMIT] Operaciones en último minuto: {current_usage}/{self.max_requests}")
-    
-    def reset(self):
-        """Resetear el contador"""
-        self.request_times = []
-        self.warning_shown = False
 
 # Inicializar rate limiter global con límite más conservador
 if 'rate_limiter' not in st.session_state:
-    st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=30, warning_threshold=0.8)
+    st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=20, warning_threshold=0.75)  # Reducido de 30 a 20
 
-rate_limiter = st.session_state.rate_limiter
-
-# --- FUNCIONES LAZY LOADING PARA SPREADSHEETS ---
 def get_spreadsheet_informe():
     """Abre el spreadsheet de Informe con lazy loading y caché"""
     if 'spreadsheet_informe' not in st.session_state:
@@ -843,6 +835,57 @@ def cargar_contactos_agente(cedula_agente):
         columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
                               'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
         return pd.DataFrame(columns=columnas_requeridas)
+
+def obtener_transcripcion(recording_sid):
+    """Obtiene transcripción existente de una grabación de Twilio
+    
+    Args:
+        recording_sid: SID de la grabación de Twilio
+    
+    Returns:
+        dict: Información de la transcripción si existe, None en caso contrario
+    """
+    try:
+        print(f"[DEBUG] 📝 Buscando transcripción para recording: {recording_sid}")
+        
+        # Listar transcripciones existentes para esta grabación
+        transcriptions = client.transcriptions.list(recording_sid=recording_sid, limit=10)
+        
+        if transcriptions:
+            # Obtener la transcripción más reciente
+            transcription = transcriptions[0]
+            print(f"[DEBUG] ✅ Transcripción encontrada: {transcription.sid}")
+            print(f"[DEBUG] 📝 Status: {transcription.status}")
+            print(f"[DEBUG] 📄 URL: {transcription.url}")
+            
+            # Obtener el texto de la transcripción
+            try:
+                transcription_text = client.transcriptions(transcription.sid).fetch()
+                return {
+                    'sid': transcription.sid,
+                    'status': transcription.status,
+                    'url': transcription.url,
+                    'text': getattr(transcription_text, 'text', ''),
+                    'date_created': str(transcription.date_created) if hasattr(transcription, 'date_created') else ''
+                }
+            except Exception as e_text:
+                print(f"[ERROR] Error obteniendo texto de transcripción: {e_text}")
+                return {
+                    'sid': transcription.sid,
+                    'status': transcription.status,
+                    'url': transcription.url,
+                    'text': '',
+                    'date_created': str(transcription.date_created) if hasattr(transcription, 'date_created') else ''
+                }
+        else:
+            print(f"[DEBUG] ❌ No se encontraron transcripciones para {recording_sid}")
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] ❌ Error obteniendo transcripción: {e}")
+        import traceback
+        print(f"[ERROR] Traceback completo: {traceback.format_exc()}")
+        return None
 
 def solicitar_transcripcion(recording_sid):
     """Solicita transcripción de una grabación de Twilio
@@ -1524,7 +1567,10 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                 dia_semana = fecha.strftime('%A')
                 
                 # Filtrar datos del día
-                dia_informe = df_informe[df_informe['fecha'] == fecha.strftime('%Y-%m-%d')]
+                if 'fecha_llamada' in df_informe.columns:
+                    dia_informe = df_informe[df_informe['fecha_llamada'].str.contains(fecha.strftime('%Y-%m-%d'), na=False)]
+                else:
+                    dia_informe = pd.DataFrame()  # DataFrame vacío si no hay la columna
                 
                 if not dia_informe.empty:
                     llamadas_dia = dia_informe['llamadas_efectivas'].sum()
@@ -1863,20 +1909,124 @@ def verificar_autoguardado():
 def marcar_cambios_pendientes():
     """Marca que hay cambios pendientes para auto-guardar"""
     st.session_state.cambios_pendientes = True
-    print("[DEBUG] Cambios pendientes marcados para auto-guardado")
 
-# Ejecutar verificación de auto-guardado en cada refresh
-verificar_autoguardado()
+# --- FUNCIÓN DE VERIFICACIÓN DIFERIDA DE TRANSCRIPCIONES ---
+def verificar_transcripciones_pendientes():
+    """
+    Verifica transcripciones pendientes con estrategia ultra-rápida:
+    - Primera verificación: 30 segundos después de la grabación
+    - Verificaciones subsiguientes: Cada 30 segundos durante 5 minutos
+    - Después: Cada 2 minutos hasta 15 minutos
+    """
+    try:
+        # Evitar lectura si hay rate limit activo
+        if len(rate_limiter.request_times) >= rate_limiter.max_requests * 0.8:
+            print("[TRANSCRIPCION] ⚠️ Rate limit activo, omitiendo verificación")
+            return
+        
+        df_informe = read_sheet("0")
+        if df_informe.empty:
+            return
+        
+        # Asegurar que existe la columna transcription_sid
+        if 'transcription_sid' not in df_informe.columns:
+            df_informe['transcription_sid'] = ''
+        
+        # Filtrar registros con transcripción pendiente (tienen recording_sid pero no transcription_sid)
+        mask_pendientes = (df_informe['transcription_sid'].fillna('') == '') & (df_informe['url_grabacion'].fillna('') != '')
+        if not mask_pendientes.any():
+            return
+        
+        df_pendientes = df_informe[mask_pendientes].copy()
+        print(f"[TRANSCRIPCION] 🔍 Verificando {len(df_pendientes)} transcripciones pendientes")
+        
+        now = datetime.now()
+        transcripciones_actualizadas = 0
+        
+        for idx, row in df_pendientes.iterrows():
+            # Extraer recording_sid de la URL de grabación
+            url_grabacion = row.get('url_grabacion', '')
+            if not url_grabacion:
+                continue
+            
+            # Extraer recording_sid de la URL
+            try:
+                recording_sid = url_grabacion.split('/')[-2]  # Extraer SID de la URL
+                if not recording_sid:
+                    continue
+            except:
+                continue
+            
+            try:
+                fecha_llamada = pd.to_datetime(row['fecha_llamada'])
+                tiempo_transcurrido = (now - fecha_llamada).total_seconds()
+            except:
+                continue
+            
+            # ESTRATEGIA ULTRA-RÁPIDA DE VERIFICACIÓN
+            debe_verificar = False
+            
+            if tiempo_transcurrido >= 30 and tiempo_transcurrido < 300:
+                # Entre 30s y 5min: verificar cada 30 segundos (ULTRA RÁPIDO)
+                if tiempo_transcurrido % 30 < 15:
+                    debe_verificar = True
+                    print(f"[TRANSCRIPCION] ⚡ Verificación ultra-rápida (30s-5min): {recording_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            elif tiempo_transcurrido >= 300 and tiempo_transcurrido < 900:
+                # Entre 5min y 15min: verificar cada 2 minutos (rápido)
+                if tiempo_transcurrido % 120 < 15:
+                    debe_verificar = True
+                    print(f"[TRANSCRIPCION] 🔥 Verificación rápida (5-15min): {recording_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            elif tiempo_transcurrido >= 900:
+                # Después de 15min: verificar cada 5 minutos (normal)
+                if tiempo_transcurrido % 300 < 15:
+                    debe_verificar = True
+                    print(f"[TRANSCRIPCION] 🐌 Verificación normal (>15min): {recording_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            
+            if not debe_verificar:
+                continue
+            
+            # Timeout reducido: 15 minutos para transcripciones urgentes
+            if tiempo_transcurrido > 900:
+                df_informe.at[idx, 'transcription_sid'] = 'TIMEOUT'
+                transcripciones_actualizadas += 1
+                print(f"[TRANSCRIPCION] ⏰ Timeout para {recording_sid[:8]}... ({int(tiempo_transcurrido/60)}min)")
+                continue
+            
+            try:
+                # Intentar obtener transcripción existente
+                transcription_data = obtener_transcripcion(recording_sid)
+                if transcription_data:
+                    df_informe.at[idx, 'transcription_sid'] = transcription_data['sid']
+                    transcripciones_actualizadas += 1
+                    print(f"[TRANSCRIPCION] ✅ Transcripción encontrada: {recording_sid[:8]}... ({int(tiempo_transcurrido)}s)")
+                else:
+                    print(f"[TRANSCRIPCION] ❌ Sin transcripción aún: {recording_sid[:8]}... ({int(tiempo_transcurrido)}s)")
+                    
+            except Exception as e:
+                print(f"[TRANSCRIPCION] ❌ Error verificando {recording_sid[:8]}...: {e}")
+        
+        if transcripciones_actualizadas > 0:
+            if update_sheet(df_informe, "0"):
+                print(f"[TRANSCRIPCION] 💾 {transcripciones_actualizadas} transcripciones actualizadas")
+                add_log(f"TRANSCRIPCIONES_ACTUALIZADAS: {transcripciones_actualizadas}", "DATA")
+    except Exception as e:
+        print(f"[TRANSCRIPCION] ❌ Error general verificando transcripciones: {e}")
+        add_log(f"ERROR_TRANSCRIPCIONES: {e}", "ERROR")
 
 # --- FUNCIÓN DE VERIFICACIÓN DIFERIDA DE GRABACIONES MEJORADA ---
 def verificar_grabaciones_pendientes():
     """
-    Verifica grabaciones pendientes con estrategia mejorada:
+    Verifica grabaciones pendientes con estrategia ultra-rápida:
     - Primera verificación: 30 segundos después de la llamada
-    - Verificaciones subsiguientes: Cada 2 minutos durante 15 minutos
-    - Después: Cada 5 minutos (comportamiento original)
+    - Verificaciones subsiguientes: Cada 30 segundos durante 5 minutos
+    - Después: Cada 2 minutos hasta 15 minutos
     """
     try:
+        # Evitar lectura si hay rate limit activo
+        if len(rate_limiter.request_times) >= rate_limiter.max_requests * 0.8:
+            print("[GRABACION] ⚠️ Rate limit activo, omitiendo verificación")
+            return
+        
         df_informe = read_sheet("0")
         if df_informe.empty:
             return
@@ -1907,33 +2057,37 @@ def verificar_grabaciones_pendientes():
             except:
                 continue
             
-            # ESTRATEGIA MEJORADA DE VERIFICACIÓN
+            # ESTRATEGIA ULTRA-RÁPIDA DE VERIFICACIÓN
             # - Primera verificación: 30 segundos
-            # - Verificaciones frecuentes: Cada 2 mins hasta 15 mins
-            # - Verificaciones normales: Cada 5 mins después
+            # - Verificaciones frecuentes: Cada 30 segundos hasta 5 minutos
+            # - Verificaciones normales: Cada 2 minutos hasta 15 minutos
             
             debe_verificar = False
             
-            if tiempo_transcurrido >= 30 and tiempo_transcurrido < 900:
-                # Entre 30 seg y 15 mins: verificar cada 2 minutos
-                minutos_transcurridos = int(tiempo_transcurrido / 60)
-                if minutos_transcurridos == 0 or (tiempo_transcurrido % 120 < 30):
+            if tiempo_transcurrido >= 30 and tiempo_transcurrido < 300:
+                # Entre 30s y 5min: verificar cada 30 segundos (ULTRA RÁPIDO)
+                if tiempo_transcurrido % 30 < 15:
                     debe_verificar = True
-                    print(f"[GRABACION] ⚡ Verificación rápida (30s-15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
+                    print(f"[GRABACION] ⚡ Verificación ultra-rápida (30s-5min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
+            elif tiempo_transcurrido >= 300 and tiempo_transcurrido < 900:
+                # Entre 5min y 15min: verificar cada 2 minutos (rápido)
+                if tiempo_transcurrido % 120 < 15:
+                    debe_verificar = True
+                    print(f"[GRABACION] 🔥 Verificación rápida (5-15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
             elif tiempo_transcurrido >= 900:
-                # Después de 15 mins: verificar cada 5 minutos (original)
-                if tiempo_transcurrido % 300 < 30:
+                # Después de 15min: verificar cada 5 minutos (normal)
+                if tiempo_transcurrido % 300 < 15:
                     debe_verificar = True
                     print(f"[GRABACION] 🐌 Verificación normal (>15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
             
             if not debe_verificar:
                 continue
             
-            # Timeout extendido: 30 minutos en lugar de 15
-            if tiempo_transcurrido > 1800:
+            # Timeout reducido: 15 minutos para grabaciones urgentes
+            if tiempo_transcurrido > 900:
                 df_informe.at[idx, 'grabacion_pendiente'] = 'TIMEOUT'
                 grabaciones_actualizadas += 1
-                print(f"[GRABACION] ⏰ Timeout extendido para {call_sid[:8]}... ({int(tiempo_transcurrido/60)}min)")
+                print(f"[GRABACION] ⏰ Timeout para {call_sid[:8]}... ({int(tiempo_transcurrido/60)}min)")
                 continue
             
             try:
@@ -1968,9 +2122,7 @@ def verificar_grabaciones_pendientes():
         print(f"[GRABACION] ❌ Error general verificando grabaciones: {e}")
         add_log(f"ERROR_GRABACIONES: {e}", "ERROR")
 
-# --- 4. SIDEBAR (FUNCIONALIDADES COMPLETAS) ---
-with st.sidebar:
-    st.header(f"Agente: {st.session_state.agente_id}")
+# ... (rest of the code remains the same)
     if st.session_state.numero_celular_agente:
         st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
     
@@ -2176,7 +2328,7 @@ with tab_pruebas:
     
     with col_test2:
         st.write("**Iniciar Prueba**")
-        
+
         if 'test_call_sid' not in st.session_state:
             st.session_state.test_call_sid = None
         
@@ -2230,6 +2382,11 @@ with tab_pruebas:
             except Exception as e:
                 st.error(f"Error: {e}")
                 st.session_state.test_call_sid = None
+
+# --- VERIFICACIONES EN SEGUNDO PLANO ---
+# Verificar grabaciones y transcripciones pendientes en cada refresh
+verificar_grabaciones_pendientes()
+verificar_transcripciones_pendientes()
 
 # --- 6. OPERACIÓN CON WEBRTC (BLOQUE EXPANDIDO Y REFORZADO) ---
 with tab_op:
@@ -2677,9 +2834,45 @@ with tab_op:
                                         import traceback
                                         print(traceback.format_exc())
                                 # ============================================================
-                                # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
+                                # BOTÓN WEBRTC CON LLAMADA REAL A TWILIO
                                 # ============================================================
                                 
+                                if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
+                                    try:
+                                        # 🚨 INICIAR LLAMADA REAL A TWILIO (como Conference Call)
+                                        print(f"[DEBUG] Iniciando WebRTC - Llamando a: {tel}")
+
+                                        # Crear llamada directa al cliente
+                                        call_webrtc = client.calls.create(
+                                            to=tel,
+                                            from_=twilio_number,
+                                            machine_detection='Enable',
+                                            record=True,
+                                            status_callback=f"{function_url}/status",
+                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                        )
+
+                                        # Guardar SID de la llamada
+                                        st.session_state.webrtc_call_sid = call_webrtc.sid
+                                        print(f"[DEBUG] WebRTC Call SID creado: {call_webrtc.sid}")
+
+                                        # Marcar WebRTC como activo y guardar datos
+                                        st.session_state.webrtc_activo = True
+                                        st.session_state.webrtc_numero = tel
+                                        st.session_state.webrtc_nombre = c['nombre']
+                                        st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
+                                        st.session_state.t_inicio_dt = datetime.now()
+
+                                        add_log(f"WEBRTC_START: {c['nombre']} - {tel} - SID: {call_webrtc.sid}", "TWILIO")
+                                        st.success(f"✅ Llamada WebRTC iniciada - SID: {call_webrtc.sid[:8]}...")
+                                        st.rerun()
+
+                                    except Exception as e:
+                                        st.error(f"Error al iniciar llamada WebRTC: {e}")
+                                        print(f"[ERROR] Error en WebRTC call: {e}")
+                                        import traceback
+                                        print(traceback.format_exc())
+
                                 # --- OPCIÓN 1: Botón Server-Side (COMENTADO - No sirve para audio bidireccional) ---
                                 # if st.button("📞 LLAMAR (Server)", use_container_width=True, key=f"call_server_{idx}"):
                                 #     try:
@@ -2692,32 +2885,31 @@ with tab_op:
                                 #         )
                                 #         st.session_state.llamada_activa_sid = call.sid
                                 #         st.session_state.t_inicio_dt = datetime.now()
-                                #         add_log(f"CALL_START_SERVER: {c['nombre']}", "TWILIO")
-                                #         st.rerun()
-                                #     except Exception as e:
-                                #         st.error(f"Error al iniciar llamada: {e}")
-                                
-                                # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
-                                if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
-                                    # Marcar WebRTC como activo y guardar datos
-                                    st.session_state.webrtc_activo = True
-                                    st.session_state.webrtc_numero = tel
-                                    st.session_state.webrtc_nombre = c['nombre']
-                                    st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
-                                    st.session_state.t_inicio_dt = datetime.now()
-                                    add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
-                                    st.rerun()
-                            else:
-                                # --- MONITOR DINÁMICO ---
-                                
-                                # Verificar si es llamada WebRTC Y si este es el contacto activo
-                                if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
                                     # Monitor para WebRTC
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
                                     segundos = tiempo_transcurrido % 60
                                     st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
                                     st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
+                                    
+                                    # 📊 MOSTRAR CONTADOR DE INTENTOS DURANTE WEBRTC (como Conference)
+                                    intentos_webrtc = contar_intentos_llamada(tel, st.session_state.agente_id)
+                                    col_intent1, col_intent2, col_intent3 = st.columns(3)
+                                    with col_intent1:
+                                        if intentos_webrtc['necesita_whatsapp']:
+                                            st.markdown(f"<div style='background: linear-gradient(135deg, #ff4757, #ff6b7a);'>📞 {intentos_webrtc['total_intentos']}/3</div>", unsafe_allow_html=True)
+                                        elif intentos_webrtc['total_intentos'] >= 2:
+                                            st.markdown(f"<div style='background: linear-gradient(135deg, #ffa502, #ff6348);'>📞 {intentos_webrtc['total_intentos']}/3</div>", unsafe_allow_html=True)
+                                        else:
+                                            st.markdown(f"<div style='background: linear-gradient(135deg, #26de81, #20bf6b);'>📞 {intentos_webrtc['total_intentos']}/3</div>", unsafe_allow_html=True)
+                                    with col_intent2:
+                                        st.markdown(f"<div>Pendientes: {intentos_webrtc['desde_pendientes']}</div><div>No Contestó: {intentos_webrtc['desde_no_contesto']}</div>", unsafe_allow_html=True)
+                                    with col_intent3:
+                                        if intentos_webrtc['necesita_whatsapp']:
+                                            st.markdown("<div style='background: #ff4757;'>📱 WhatsApp</div>", unsafe_allow_html=True)
+                                        else:
+                                            faltantes = 3 - intentos_webrtc['total_intentos']
+                                            st.markdown(f"<div>Faltan: {faltantes}</div>", unsafe_allow_html=True)
                                     
                                     # Buscar el SID de llamada WebRTC si no lo tenemos
                                     if st.session_state.webrtc_call_sid is None:
@@ -2985,43 +3177,64 @@ with tab_op:
                                                         print(f"[DEBUG] Datos de llamada obtenidos: duration={duracion_facturada}s, answered_by={estado_respuesta}, from={from_number}, to={to_number}")
                                                     
                                                     # Esperar 5 segundos para que la grabación esté disponible
-                                                    st.write(" Esperando grabación (5s)...")
+                                                    st.write("⏳ Esperando grabación (5s)...")
                                                     time.sleep(5)
                                                     
-                                                    # Intentar obtener la grabación con retry (máximo 3 intentos)
+                                                    # Intentar obtener la grabación con retry inmediato
                                                     max_intentos = 3
                                                     transcription_sid = None
+                                                    url_grabacion = ''
                                                     
                                                     for intento in range(max_intentos):
-                                                        recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
-                                                        if recordings:
-                                                            recording = recordings[0]
-                                                            url_grabacion = f"https://api.twilio.com{recording.uri.replace('.json', '.mp3')}"
-                                                            print(f"[DEBUG] Grabación encontrada: {url_grabacion}")
-                                                            st.success(" Grabación disponible")
-                                                            
-                                                            # PCI Mode no permite transcripciones automáticas - Grabación solamente
-                                                            st.info(" PCI Mode - Solo grabación disponible")
-                                                            print(f"[DEBUG] PCI Mode detectado - Transcripción no disponible")
-                                                            print(f"[DEBUG] Grabación guardada: {recording.sid}")
-                                                            
-                                                            # No intentar transcripción en PCI Mode para evitar errores
-                                                            transcription_sid = None
-                                                            
-                                                            break
-                                                        else:
-                                                            print(f"[DEBUG] Intento {intento + 1}/{max_intentos}: Grabación no disponible aún")
-                                                            if intento < max_intentos - 1:
-                                                                st.write(f" Reintentando obtener grabación ({intento + 2}/{max_intentos})...")
-                                                                time.sleep(3)
+                                                        try:
+                                                            recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
+                                                            if recordings:
+                                                                recording_sid = recordings[0].sid
+                                                                url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                                                                print(f"[DEBUG] ✅ Grabación encontrada: {url_grabacion}")
+                                                                st.success(f"🎙️ Grabación disponible")
+                                                                
+                                                                # Intentar transcripción si hay URL
+                                                                try:
+                                                                    # Primero intentar obtener transcripción existente
+                                                                    transcription_data = obtener_transcripcion(recording_sid)
+                                                                    if transcription_data:
+                                                                        transcription_sid = transcription_data['sid']
+                                                                        transcription_text = transcription_data['text']
+                                                                        print(f"[DEBUG] 📝 Transcripción existente encontrada: {transcription_sid[:8]}...")
+                                                                        print(f"[DEBUG] 📄 Texto preview: {transcription_text[:100]}...")
+                                                                    else:
+                                                                        # Si no existe, solicitar nueva transcripción
+                                                                        transcription_sid = solicitar_transcripcion(recording_sid)
+                                                                        if transcription_sid:
+                                                                            print(f"[DEBUG] 📝 Nueva transcripción solicitada: {transcription_sid[:8]}...")
+                                                                except Exception as e_trans:
+                                                                    print(f"[DEBUG] ⚠️ Error con transcripción: {e_trans}")
+                                                                    transcription_sid = None
+                                                                
+                                                                break  # ✅ Encontrado inmediatamente
                                                             else:
-                                                                st.warning(" Grabación no disponible aún - Se guardará sin URL")
-                                                                print(f"[WARNING] Grabación no encontrada después de {max_intentos} intentos")
-                                                    
+                                                                print(f"[DEBUG] Intento {intento + 1}/{max_intentos}: Grabación no disponible aún")
+                                                                if intento < max_intentos - 1:
+                                                                    st.write(f"⏳ Reintentando obtener grabación ({intento + 2}/{max_intentos})...")
+                                                                    time.sleep(3)
+                                                                else:
+                                                                    st.warning("⚠️ Grabación no disponible aún - Se guardará sin URL")
+                                                                    print(f"[WARNING] Grabación no encontrada después de {max_intentos} intentos")
+                                                                    url_grabacion = ''
+                                                                    transcription_sid = None
+                                                        except Exception as e_retry:
+                                                            print(f"[DEBUG] Error en intento {intento + 1}: {e_retry}")
+                                                            if intento == max_intentos - 1:
+                                                                url_grabacion = ''
+                                                                transcription_sid = None
+                                                            
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
-                                                    st.warning(f" Error obteniendo datos de Twilio: {e_twilio}")
-                                                 
+                                                    st.warning(f"⚠️ Error obteniendo datos de Twilio: {e_twilio}")
+                                                    url_grabacion = ''
+                                                    transcription_sid = None
+                                                    
                                                 # Preparar fila para Sheet Informe con TODAS las columnas de Twilio
                                                 fila_informe = pd.DataFrame({
                                                     # Columnas del sistema
