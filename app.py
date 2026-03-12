@@ -2611,13 +2611,13 @@ with tab_op:
                                         # Paso 1: Llamar al agente primero
                                         print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
                                  
-                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                        # 🎯 USAR NÚMERO DE CLIENTE COMO ID DE SALA (consistente con function)
+                                        conference_name = f"Conf_{tel.replace('+', '').replace(' ', '').replace('-', '')}"
+                                        print(f"[DEBUG] Nombre de conferencia: {conference_name}")
                                         
-                                        # TwiML para el agente (con tonos de notificación)
-                                        twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                                        # Crear TwiML para la conferencia (IGUAL para ambos como en backup)
+                                        twiml_conference = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Say language="es-MX">Conectando llamada</Say>
-                                            <Play digits="1"></Play>
                                             <Dial>
                                                 <Conference 
                                                     startConferenceOnEnter="true"
@@ -2633,53 +2633,34 @@ with tab_op:
                                             </Dial>
                                         </Response>"""
                                         
-                                        # TwiML para el cliente (optimizado para calidad y estabilidad)
-                                        twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
-                                        <Response>
-                                            <Dial 
-                                                action="{function_url}/dial-status" 
-                                                method="POST" 
-                                                timeout="30"
-                                                callerId="{st.session_state.numero_celular_agente}"
-                                                answerOnBridge="true"
-                                                record="record-from-answer"
-                                                recordingStatusCallback="{function_url}/recording-status"
-                                                trim="trim-silence"
-                                                machineDetection="Enable"
-                                                machineDetectionTimeout="2000"
-                                                timeLimit="7200"
-                                            >
-                                                <Number 
-                                                    url="{function_url}/machine-detection" 
-                                                    statusCallbackEvent="initiated ringing answered completed"
-                                                    statusCallback="{function_url}/status"
-                                                    timeLimit="7200"
-                                                >{tel}</Number>
-                                            </Dial>
-                                        </Response>"""
-                                        
-                                        # Llamar al agente
+                                        # Llamar al agente con callback especial para sincronización
                                         call_agente = client.calls.create(
-                                            twiml=twiml_agente,
+                                            twiml=twiml_conference,
                                             to=st.session_state.numero_celular_agente,
                                             from_=twilio_number,
-                                            status_callback=f"{function_url}/status",
-                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                            status_callback=f"{function_url}/agent-status",
+                                            status_callback_method="POST",
+                                            status_callback_event=['answered'],  # Solo cuando contesta
+                                            # Pasar datos del cliente para llamar automáticamente
+                                            application_sid=tel  # Usar como identificador temporal
                                         )
                                         
-                                        # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
+                                        # Esperar 1 segundo (reducido de 2) para asegurar que el agente entre primero
+                                        time.sleep(1)
+                                        
+                                        # Llamar al cliente con el MISMO TwiML (como en backup)
                                         print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
                                         
                                         call_cliente = client.calls.create(
-                                            twiml=twiml_cliente,
+                                            twiml=twiml_conference,  # MISMO TwiML que el agente
                                             to=tel,
                                             from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
+                                            machine_detection='Enable',  # A nivel de API como en backup
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
-                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                         st.session_state.llamada_activa_sid = call_cliente.sid
                                         st.session_state.conference_name = conference_name
                                         st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
