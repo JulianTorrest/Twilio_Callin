@@ -889,6 +889,23 @@ def cargar_contactos_agente(cedula_agente):
         df_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(cedula_agente)].copy()
         print(f"[DEBUG] Contactos para agente {cedula_agente}: {len(df_agente)}")
         
+        # DEBUG: Mostrar todos los contactos con estado 'Gestionado' para ver si alguno coincide
+        gestionados_todos = df_todos[df_todos['estado'] == 'Gestionado']
+        print(f"[DEBUG] Total contactos Gestionados en sheet: {len(gestionados_todos)}")
+        
+        # DEBUG: Buscar específicamente el contacto 'Pau' o con teléfono 3138785884
+        contacto_pau = df_todos[df_todos['nombre'].str.contains('Pau', na=False)]
+        contacto_tel = df_todos[df_todos['telefono'].str.contains('3138785884', na=False)]
+        
+        if not contacto_pau.empty:
+            print(f"[DEBUG] Contacto Pau encontrado: {contacto_pau[['nombre', 'telefono', 'cedula_agente', 'estado']].to_string()}")
+        if not contacto_tel.empty:
+            print(f"[DEBUG] Contacto con teléfono 3138785884: {contacto_tel[['nombre', 'telefono', 'cedula_agente', 'estado']].to_string()}")
+        
+        # DEBUG: Mostrar cédulas de agentes únicas
+        cedulas_unicas = df_todos['cedula_agente'].dropna().unique()
+        print(f"[DEBUG] Cédulas de agentes únicas en sheet: {list(cedulas_unicas)}")
+        
         if df_agente.empty:
             print(f"[DEBUG] No hay contactos asignados al agente {cedula_agente}")
             return pd.DataFrame(columns=columnas_requeridas)
@@ -3495,6 +3512,82 @@ with tab_op:
                                     else:
                                         # Auto-refresh para actualizar cronómetro y detectar cambios de estado
                                         time.sleep(1)
+                                        st.rerun()
+
+                                # --- MONITOREO DE LLAMADA CONFERENCE ACTIVA ---
+                                elif st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
+                                    try:
+                                        print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
+                                        
+                                        # CRONÓMETRO EN TIEMPO REAL
+                                        tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                        minutos = tiempo_transcurrido // 60
+                                        segundos = tiempo_transcurrido % 60
+                                        st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                        
+                                        # 1. Consultar estado real en Twilio
+                                        print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
+                                        remote = client.calls(st.session_state.llamada_activa_sid).fetch()
+                                        print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
+                                        st.info(f"📞 Estado Twilio: {remote.status}")
+                                        
+                                        # 2. Definir condiciones de terminación
+                                        call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
+                                        print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
+                                        
+                                        # 3. Detectar casos especiales y colgar automáticamente
+                                        answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
+                                        es_maquina = answered_by in ['machine_start', 'fax']
+                                        
+                                        # Botones en columnas (SIEMPRE mostrar durante llamada activa)
+                                        st.markdown("### 🎛️ Control de Llamada")
+                                        btn_conf_col1, btn_conf_col2 = st.columns(2)
+                                        
+                                        finalizar_conference = False
+                                        
+                                        with btn_conf_col1:
+                                            if st.button("✅ FINALIZAR GESTIÓN", type="primary", key=f"fin_conf_{idx}", use_container_width=True):
+                                                finalizar_conference = True
+                                        
+                                        with btn_conf_col2:
+                                            if st.button("📞 COLGAR LLAMADA", key=f"colgar_conf_{idx}", use_container_width=True):
+                                                try:
+                                                    client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                    st.success("📞 Llamada colgada")
+                                                    finalizar_conference = True
+                                                except Exception as e:
+                                                    st.error(f"Error colgando llamada: {e}")
+                                        
+                                        # Si la llamada terminó remotamente, marcar para finalizar automáticamente
+                                        if call_ended_by_system:
+                                            finalizar_conference = True
+                                            st.warning("📞 Llamada terminada remotamente - Finalizando gestión...")
+                                        
+                                        # Manejar finalización de llamada
+                                        if finalizar_conference:
+                                            # --- PASO 4: LIMPIEZA DE ESTADO ---
+                                            print(f"[DEBUG] Conference - Limpiando estado de llamada")
+                                            st.session_state.llamada_activa_sid = None
+                                            st.session_state.conference_name = None
+                                            st.session_state.conference_idx = None
+                                            st.session_state.t_inicio_dt = None
+                                            
+                                            st.success("✅ Llamada Conference finalizada - Pasando al siguiente contacto...")
+                                            time.sleep(2)
+                                            st.rerun()
+                                        else:
+                                            # Auto-refresh para actualizar cronómetro y detectar cambios de estado
+                                            time.sleep(1)
+                                            st.rerun()
+                                            
+                                    except Exception as e:
+                                        st.error(f"Error en monitoreo de Conference: {e}")
+                                        print(f"[ERROR] Error en monitoreo Conference: {e}")
+                                        # En caso de error, limpiar estado para evitar bloqueos
+                                        st.session_state.llamada_activa_sid = None
+                                        st.session_state.conference_name = None
+                                        st.session_state.conference_idx = None
+                                        st.session_state.t_inicio_dt = None
                                         st.rerun()
 
                                 # Monitor para Conference Call Y si este es el contacto activo
