@@ -1289,7 +1289,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
     try:
         # Datos de contactos
         total_contactos = len(df_contactos)
-        llamados = len(df_contactos[df_contactos['estado'] == 'Llamado'])
+        llamados = len(df_contactos[df_contactos['estado'].isin(['Llamado', 'Gestionado'])])
         pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
         no_contesto = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
         programadas = len(df_contactos[df_contactos['estado'] == 'Programada'])
@@ -1815,7 +1815,7 @@ if st.session_state.df_contactos is not None:
     total_pendientes = len(df[df['estado'] == 'Pendiente'])
     total_no_contestaron = len(df[df['estado'] == 'No Contesto'])
     total_programadas = len(df[df['estado'] == 'Programada'])
-    total_llamados = len(df[df['estado'] == 'Llamado'])
+    total_llamados = len(df[df['estado'].isin(['Llamado', 'Gestionado'])])
     
     col1.metric("⏳ Pendientes", total_pendientes)
     col2.metric("📵 No Contestaron", total_no_contestaron)
@@ -2301,8 +2301,8 @@ with tab_op:
         
         # Filtrado riguroso
         if "Gestionadas" in opc:
-            # Para "Gestionadas": mostrar contactos que contestaron la llamada (solo 'Llamado')
-            df_work = df[df['estado'] == 'Llamado']
+            # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
+            df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
         else:
             df_work = df[df['estado'] == f_est]
         
