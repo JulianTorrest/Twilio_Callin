@@ -3797,6 +3797,7 @@ with tab_op:
                             with col_prog1:
                                 # Obtener hora actual en Bogotá para valores por defecto
                                 hora_bogota_actual = obtener_hora_bogota()
+                                # EVITAR AUTO-GUARDADO: No marcar cambios pendientes para inputs de programación
                                 fecha_prog = st.date_input("Fecha:", value=hora_bogota_actual.date(), key=f"fecha_{idx}")
                             with col_prog2:
                                 hora_prog = st.time_input("Hora:", value=hora_bogota_actual.time(), key=f"hora_{idx}")
@@ -3821,57 +3822,3 @@ with tab_op:
                                             nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
                                     else:
                                         nota_acumulada = nota  # Usar nueva nota si no existe nada
-                                    
-                                    # Actualizar DataFrame local con notas acumuladas
-                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
-                                    
-                                    # Actualizar Sheet Llamadas con función segura
-                                    if URL_SHEET_CONTACTOS:
-                                        try:
-                                            if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
-                                                add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
-                                                st.success("✅ Notas acumuladas en Sheet Llamadas con seguridad")
-                                            else:
-                                                st.warning("⚠️ Notas acumuladas localmente, pero error actualizando Sheet Llamadas")
-                                        except Exception as e:
-                                            st.error(f"❌ Error acumulando notas: {e}")
-                                    else:
-                                        st.success("✅ Notas acumuladas localmente")
-                                    
-                                    time.sleep(1)
-                                    st.rerun()
-                            
-                            with col_btn2:
-                                if st.button("✅ Programar", key=f"prog_{idx}", use_container_width=True):
-                                    # Combinar fecha y hora
-                                    fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
-                                    
-                                    # Obtener nota actual (que ya incluye notas acumuladas si se guardaron)
-                                    nota_actual = st.session_state.df_contactos.at[idx, 'observacion']
-                                    
-                                    # Actualizar DataFrame local
-                                    st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
-                                    st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
-                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual  # Mantener notas acumuladas
-                                    st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                                    
-                                    # Actualizar Sheet Llamadas con función segura
-                                    if URL_SHEET_CONTACTOS:
-                                        try:
-                                            if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
-                                                add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                                                st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} con seguridad")
-                                            else:
-                                                st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
-                                        except Exception as e:
-                                            st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
-                                            print(f"[ERROR] Programar llamada - Update Sheet: {e}")
-                                    else:
-                                        st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
-                                    
-                                    time.sleep(1)
-                                    st.rerun()
-        else:
-            st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
-    else:
-        st.info("Por favor, cargue un archivo CSV en el sidebar para comenzar la operación.")
