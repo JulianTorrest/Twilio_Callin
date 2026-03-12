@@ -2536,7 +2536,7 @@ with tab_op:
         twilio_sdk_content = "console.error('No se pudo cargar el SDK de Twilio');"
     
     # Determinar si hay una llamada WebRTC pendiente
-    numero_a_llamar = st.session_state.webrtc_numero if st.session_state.webrtc_activo else ''
+    numero_a_llamar = st.session_state.get('numero_a_llamar', '') or st.session_state.get('webrtc_numero', '')
     
     twilio_webrtc_component = f"""
     <div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
