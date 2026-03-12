@@ -2968,18 +2968,15 @@ with tab_op:
                         nota_existente = st.session_state.draft_notas.get(idx, c['observacion'])
                         nota = st.text_area("📝 Notas:", value=nota_existente, key=f"notas_{idx}")
                         
+                        # Obtener el valor actual de la nota
+                        nota_actual = st.session_state.draft_notas.get(idx, c['observacion'])
+                        
                         # Auto-guardar cuando el agente modifica notas
-                        if nota != nota_existente:
+                        if nota_actual != nota_existente:
                             # Actualizar nota local inmediatamente
-                            st.session_state.df_contactos.at[idx, 'observacion'] = nota
+                            st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual
                             # Marcar para auto-guardado
                             marcar_cambios_pendientes()
-                        
-                        st.session_state.draft_notas[idx] = nota
-
-                    with col2:
-                        # MOSTRAR CONTADOR DE INTENTOS PARA USUARIOS NO CONTESTADOS
-                        if c['estado'] == 'No Contesto':
                             mostrar_contador_intentos(tel, st.session_state.agente_id)
                         
                         # BOTÓN DE EMERGENCIA PARA LIMPIAR ESTADO WEBRTC
@@ -3508,11 +3505,10 @@ with tab_op:
                                         
                                         st.success(" Llamada WebRTC finalizada - Pasando al siguiente contacto...")
                                         time.sleep(2)
-                                        st.rerun()
+                                        
                                     else:
                                         # Auto-refresh para actualizar cronómetro y detectar cambios de estado
-                                        time.sleep(1)
-                                        st.rerun()
+                                        # El usuario puede hacer clic manualmente si necesita actualizar
 
                                 # --- MONITOREO DE LLAMADA CONFERENCE ACTIVA ---
                                 elif st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
@@ -3570,55 +3566,10 @@ with tab_op:
                                             st.session_state.llamada_activa_sid = None
                                             st.session_state.conference_name = None
                                             st.session_state.conference_idx = None
-                                            st.session_state.t_inicio_dt = None
-                                            
-                                            st.success("✅ Llamada Conference finalizada - Pasando al siguiente contacto...")
-                                            time.sleep(2)
-                                            st.rerun()
-                                        else:
-                                            # Auto-refresh para actualizar cronómetro y detectar cambios de estado
-                                            time.sleep(1)
-                                            st.rerun()
-                                            
-                                    except Exception as e:
-                                        st.error(f"Error en monitoreo de Conference: {e}")
-                                        print(f"[ERROR] Error en monitoreo Conference: {e}")
-                                        # En caso de error, limpiar estado para evitar bloqueos
-                                        st.session_state.llamada_activa_sid = None
-                                        st.session_state.conference_name = None
-                                        st.session_state.conference_idx = None
-                                        st.session_state.t_inicio_dt = None
-                                        st.rerun()
-
-                                # Monitor para Conference Call Y si este es el contacto activo
-                            if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
-                                try:
-                                    print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
-                                    # CRONÓMETRO EN TIEMPO REAL
-                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                    minutos = tiempo_transcurrido // 60
-                                    segundos = tiempo_transcurrido % 60
-                                    st.markdown(f" ### Tiempo: {minutos:02d}:{segundos:02d}")
-                                    
-                                    # 1. Consultar estado real en Twilio
-                                    print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
-                                    remote = client.calls(st.session_state.llamada_activa_sid).fetch()
-                                    print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
-                                    st.info(f" Estado Twilio: {remote.status}")
-                                    
-                                    # 2. Definir condiciones de terminación
-                                    call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
-                                    print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
-                                    
-                                    # 3. Detectar casos especiales y colgar automáticamente
-                                    answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
-                                    es_maquina = answered_by in ['machine_start', 'fax']
-                                    
-                                    # PRIORIDAD MEDIA 3: Timeout de conferencia INTELIGENTE (>60s con 1 solo participante)
-                                    if not call_ended_by_system and tiempo_transcurrido > 60 and remote.status == 'in-progress':
-                                        try:
-                                            # Verificar cuántos participantes hay en la conferencia
+                                        # Colgar automáticamente si es máquina
+                                        elif es_maquina and not call_ended_by_system:
+                                            st.warning(f" Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
                                             conference_name = st.session_state.get('conference_name', None)
                                             num_participantes = 0
                                             
@@ -4062,6 +4013,9 @@ with tab_op:
                                     print(f"[DEBUG GUARDAR_NOTAS] 🔄 Botón presionado - idx: {idx}")
                                     print(f"[DEBUG GUARDAR_NOTAS] 🔄 Contacto: {c['nombre']}")
                                     print(f"[DEBUG GUARDAR_NOTAS] 🔄 Estado actual: {st.session_state.df_contactos.at[idx, 'estado']}")
+                                    
+                                    # Obtener nota actual del text_area
+                                    nota = st.session_state.draft_notas.get(idx, c['observacion'])
                                     
                                     # Obtener nota existente
                                     nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
