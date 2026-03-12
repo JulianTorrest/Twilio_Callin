@@ -469,6 +469,9 @@ class RateLimiter:
 if 'rate_limiter' not in st.session_state:
     st.session_state.rate_limiter = RateLimiter(max_requests_per_minute=20, warning_threshold=0.75)  # Reducido de 30 a 20
 
+# Crear variable global para acceso fácil desde funciones
+rate_limiter = st.session_state.rate_limiter
+
 def get_spreadsheet_informe():
     """Abre el spreadsheet de Informe con lazy loading y caché"""
     if 'spreadsheet_informe' not in st.session_state:
