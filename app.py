@@ -3191,7 +3191,7 @@ with tab_op:
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status  # Mantener Llamado/No Contesto
+                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Gestionado' if webrtc_final_status == 'Llamado' else webrtc_final_status
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
@@ -3663,7 +3663,7 @@ with tab_op:
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = final_status  # Mantener Llamado/No Contesto
+                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Gestionado' if final_status == 'Llamado' else final_status
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
