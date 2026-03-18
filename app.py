@@ -120,6 +120,9 @@ try:
     GDRIVE_LOGS_FOLDER_ID = st.secrets.get("GDRIVE_LOGS_FOLDER_ID")
     CEDULAS_AUTORIZADAS = st.secrets.get("CEDULAS_AUTORIZADAS", ["1121871773", "87654321", "12345678","52486921"])
     
+    # Sheets específicos por agente
+    AGENT_SHEETS = dict(st.secrets.get("agent_sheets", {}))
+    
     # Mapeo de números celulares de agentes para Hybrid Click-to-Call
     NUMEROS_CELULAR_AGENTES = dict(st.secrets.get("numeros_celular_agentes", {}))
     
@@ -545,12 +548,176 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         print(traceback.format_exc())
         return False
 
-def cargar_contactos_agente(cedula_agente):
-    """Carga contactos desde Google Sheets filtrados por cedula_agente"""
+def update_single_call_row(df_contactos, idx, sheet_url):
+    """
+    Actualiza solo la fila específica de una llamada en Google Sheets
+    en lugar de sobreescribir todo el archivo.
+    
+    Args:
+        df_contactos: DataFrame completo de contactos
+        idx: Índice de la fila a actualizar
+        sheet_url: URL del Google Sheet
+    
+    Returns:
+        bool: True si la actualización fue exitosa, False en caso contrario
+    """
     try:
-        # Leer todos los contactos del Sheet con rate limiting
+        # Verificar rate limit
+        rate_limiter.check_and_wait(operation_type="write")
+        
+        # Abrir el spreadsheet
+        spreadsheet = gc.open_by_url(sheet_url)
+        worksheet = spreadsheet.get_worksheet(0)
+        
+        # Obtener la fila específica del DataFrame (idx + 2 porque Google Sheets es 1-indexed y tiene header)
+        row_number = idx + 2
+        row_data = df_contactos.iloc[idx].values.tolist()
+        
+        # Convertir valores None/NaN a strings vacíos para Google Sheets
+        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
+        
+        print(f"[DEBUG] Actualizando fila {row_number} en Sheet Llamadas")
+        print(f"[DEBUG] Datos: {row_data[:5]}...")  # Solo mostrar primeros 5 campos
+        
+        # Actualizar solo la fila específica
+        rate_limiter.check_and_wait(operation_type="write")
+        worksheet.update(f'A{row_number}:{chr(65 + len(row_data) - 1)}{row_number}', [row_data])
+        
+        print(f"[DEBUG] ✅ Fila {row_number} actualizada exitosamente")
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Error actualizando fila específica: {e}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return False
+
+def update_call_status_safe(df_contactos, idx, nuevo_estado, observacion, duracion_seg, agente_id, fecha_llamada, sid_llamada, sheet_url):
+    """
+    Actualiza de forma segura el estado de una llamada específica sin sobreescribir todo el sheet.
+    
+    Args:
+        df_contactos: DataFrame de contactos
+        idx: Índice de la llamada a actualizar
+        nuevo_estado: Nuevo estado de la llamada
+        observacion: Observación de la llamada
+        duracion_seg: Duración en segundos
+        agente_id: ID del agente
+        fecha_llamada: Fecha y hora de la llamada
+        sid_llamada: SID de la llamada de Twilio
+        sheet_url: URL del Google Sheet
+    
+    Returns:
+        bool: True si la actualización fue exitosa
+    """
+    try:
+        # Actualizar el DataFrame local primero
+        df_contactos.at[idx, 'estado'] = nuevo_estado
+        df_contactos.at[idx, 'observacion'] = observacion
+        df_contactos.at[idx, 'duracion_seg'] = duracion_seg
+        df_contactos.at[idx, 'agente_id'] = agente_id
+        df_contactos.at[idx, 'fecha_llamada'] = fecha_llamada
+        df_contactos.at[idx, 'sid_llamada'] = sid_llamada
+        
+        # Actualizar solo esta fila en Google Sheets
+        return update_single_call_row(df_contactos, idx, sheet_url)
+        
+    except Exception as e:
+        print(f"[ERROR] Error en update_call_status_safe: {e}")
+        return False
+
+def update_both_sheets_safe(df_contactos, agente_id, operation_type="general"):
+    """
+    Actualiza tanto el sheet compartido como el sheet específico del agente.
+    Usado para notas acumuladas y llamadas programadas.
+    
+    Args:
+        df_contactos: DataFrame de contactos
+        agente_id: ID del agente
+        operation_type: Tipo de operación para logging
+    
+    Returns:
+        bool: True si ambas actualizaciones fueron exitosas
+    """
+    try:
+        success_shared = False
+        success_agent = False
+        
+        # 1. Actualizar sheet compartido (output)
+        try:
+            if update_sheet_safe(df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=agente_id):
+                success_shared = True
+                print(f"[DEBUG] {operation_type} - Sheet compartido actualizado exitosamente")
+            else:
+                print(f"[ERROR] {operation_type} - Error actualizando sheet compartido")
+        except Exception as e:
+            print(f"[ERROR] {operation_type} - Error en sheet compartido: {e}")
+        
+        # 2. Actualizar sheet específico del agente (si existe)
+        try:
+            agent_sheet_url = get_agent_sheet_url(agente_id)
+            if agent_sheet_url != URL_SHEET_CONTACTOS:  # Solo si tiene sheet específico
+                if update_sheet_safe(df_contactos, "0", sheet_url=agent_sheet_url, agente_id=agente_id):
+                    success_agent = True
+                    print(f"[DEBUG] {operation_type} - Sheet del agente {agente_id} actualizado exitosamente")
+                else:
+                    print(f"[ERROR] {operation_type} - Error actualizando sheet del agente {agente_id}")
+            else:
+                success_agent = True  # No hay sheet específico, solo usar compartido
+                print(f"[DEBUG] {operation_type} - Agente {agente_id} usa solo sheet compartido")
+        except Exception as e:
+            print(f"[ERROR] {operation_type} - Error en sheet del agente: {e}")
+        
+        return success_shared and success_agent
+        
+    except Exception as e:
+        print(f"[ERROR] Error en update_both_sheets_safe: {e}")
+        return False
+
+def validate_agent_access(agente_id):
+    """
+    Valida si un agente tiene acceso al sistema.
+    Solo agentes con sheet individual configurado pueden acceder.
+    
+    Args:
+        agente_id: ID del agente
+    
+    Returns:
+        tuple: (has_access: bool, message: str)
+    """
+    if agente_id in AGENT_SHEETS:
+        return True, f"Agente {agente_id} autorizado con sheet individual"
+    else:
+        return False, f"Agente {agente_id} no tiene sheet individual configurado"
+
+def get_agent_sheet_url(agente_id):
+    """
+    Obtiene la URL del sheet específico para un agente.
+    Si no tiene sheet específico, usa el sheet por defecto.
+    
+    Args:
+        agente_id: ID del agente
+    
+    Returns:
+        str: URL del Google Sheet para el agente
+    """
+    if agente_id in AGENT_SHEETS:
+        sheet_url = AGENT_SHEETS[agente_id]
+        print(f"[DEBUG] Usando sheet específico para agente {agente_id}: {sheet_url[:50]}...")
+        return sheet_url
+    else:
+        print(f"[DEBUG] Usando sheet por defecto para agente {agente_id}: {URL_SHEET_CONTACTOS[:50]}...")
+        return URL_SHEET_CONTACTOS
+
+def cargar_contactos_agente(cedula_agente):
+    """Carga contactos desde Google Sheets filtrados por cedula_agente usando su sheet específico"""
+    try:
+        # Obtener la URL del sheet específico del agente
+        agent_sheet_url = get_agent_sheet_url(cedula_agente)
+        
+        # Leer todos los contactos del Sheet específico del agente con rate limiting
         rate_limiter.check_and_wait(operation_type="read")
-        spreadsheet_contactos = get_spreadsheet_contactos()
+        spreadsheet_contactos = gc.open_by_url(agent_sheet_url)
         worksheet = spreadsheet_contactos.get_worksheet(0)
         data = worksheet.get_all_values()
         
@@ -1586,6 +1753,20 @@ if 'agente_id' not in st.session_state:
         ced = st.text_input("Cédula:", type="password").strip()
         if st.form_submit_button("Entrar"):
             if ced in CEDULAS_AUTORIZADAS:
+                # Validar si el agente tiene sheet individual configurado
+                has_access, access_message = validate_agent_access(ced)
+                
+                if not has_access:
+                    st.error(f"🚫 **Acceso Denegado**")
+                    st.error(f"⚠️ {access_message}")
+                    st.info("📋 **Para obtener acceso:**")
+                    st.info("1. Contacta al administrador del sistema")
+                    st.info("2. Solicita la configuración de tu sheet individual de llamadas")
+                    st.info("3. Una vez configurado, podrás acceder normalmente")
+                    st.warning("🔒 Solo agentes con sheet individual pueden usar el sistema")
+                    add_log(f"ACCESO_DENEGADO: {ced} - Sin sheet individual", "AUTH")
+                    st.stop()
+                
                 # Obtener número celular del agente desde secrets
                 numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
                 
@@ -1595,7 +1776,7 @@ if 'agente_id' not in st.session_state:
                 
                 st.session_state.agente_id = ced
                 st.session_state.numero_celular_agente = numero_celular
-                add_log(f"LOGIN_EXITOSO - Número: {numero_celular}", "AUTH")
+                add_log(f"LOGIN_EXITOSO - Número: {numero_celular} - Sheet individual: SÍ", "AUTH")
                 
                 # Cargar contactos automáticamente al iniciar sesión
                 with st.spinner("Cargando tus contactos asignados..."):
@@ -1635,7 +1816,7 @@ def verificar_autoguardado():
     if st.session_state.cambios_pendientes and (ahora - st.session_state.ultimo_autoguardado) > 30:
         if URL_SHEET_CONTACTOS and st.session_state.df_contactos is not None:
             try:
-                # Usar la función segura con concurrencia y sanitización
+                # Usar la función segura con concurrencia y sanitización en el sheet compartido de salida
                 if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.get('agente_id', 'auto_guardado')):
                     st.session_state.ultimo_autoguardado = ahora
                     st.session_state.cambios_pendientes = False
@@ -2776,6 +2957,9 @@ with tab_op:
                                     
                                     # Manejar finalización de WebRTC (manual o automática)
                                     if finalizar_webrtc or call_ended_by_remote:
+                                        # Marcar si fue finalización manual por el agente
+                                        agent_ended_call = finalizar_webrtc and not call_ended_by_remote
+                                        
                                         # Si es finalización manual, colgar la llamada en Twilio primero
                                         if finalizar_webrtc and st.session_state.webrtc_call_sid:
                                             try:
@@ -2784,13 +2968,19 @@ with tab_op:
                                             except Exception as e:
                                                 print(f"[ERROR] Error colgando llamada: {e}")
                                         
+                                        # Determinar estado final: Si el agente finalizó manualmente, marcar como Gestionada
+                                        if agent_ended_call:
+                                            webrtc_final_status = 'Gestionada'
+                                            print(f"[DEBUG] WebRTC - Finalización manual por agente - Clasificado como Gestionada")
+                                        # Si no, mantener la clasificación automática ya determinada
+                                        
                                         # Guardar gestión
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
                                         
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
-                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status  # Mantener Llamado/No Contesto
+                                        st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status  # Mantener Llamado/No Contesto/Gestionada
                                         st.session_state.df_contactos.at[idx, 'observacion'] = nota
                                         st.session_state.df_contactos.at[idx, 'duracion_seg'] = dur
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
@@ -2953,15 +3143,15 @@ with tab_op:
                                             except Exception as e_informe:
                                                 st.error(f" Error en Sheet Informe: {e_informe}")
                                         
-                                        # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
+                                        # --- PASO 3: ACTUALIZACIÓN SEGURA DE SHEET LLAMADAS (solo fila específica) ---
                                         print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write(" Actualizando estado en Sheet Llamadas...")
                                                 
-                                                # Actualizar el DataFrame completo y escribirlo de vuelta al Sheet CORRECTO
-                                                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
-                                                    st.success(" Estado actualizado en Sheet Llamadas")
+                                                # Usar función segura que actualiza en el sheet compartido de salida
+                                                if update_call_status_safe(st.session_state.df_contactos, idx, webrtc_final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.webrtc_call_sid or '', URL_SHEET_CONTACTOS):
+                                                    st.success(" Estado actualizado en Sheet Llamadas (fila específica)")
                                                     add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
                                                     st.warning(" Error actualizando Sheet Llamadas")
@@ -3135,7 +3325,7 @@ with tab_op:
                                         else:
                                             st.session_state.finalizacion_manual_agente = False
                                         
-                                        # Si es finalización manual, colgar la llamada en Twilio primero
+                                        # Si es finalización manual, colgar la llamada directamente
                                         if finalizar_manual and st.session_state.llamada_activa_sid:
                                             try:
                                                 client.calls(st.session_state.llamada_activa_sid).update(status='completed')
@@ -3154,8 +3344,8 @@ with tab_op:
                                         
                                         # PRIORIDAD ALTA 1: Si fue finalizada manualmente por el agente (botón "FINALIZAR GESTIÓN")
                                         if st.session_state.get('finalizacion_manual_agente', False):
-                                            final_status = 'Llamado'
-                                            print(f"[DEBUG] Conference - Finalización manual por agente - Clasificado como Llamado")
+                                            final_status = 'Gestionada'
+                                            print(f"[DEBUG] Conference - Finalización manual por agente - Clasificado como Gestionada")
                                         # PRIORIDAD ALTA 2: Número inválido/inexistente
                                         elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
                                             final_status = 'No Contesto'
@@ -3379,22 +3569,21 @@ with tab_op:
                                                 st.error(f"❌ Error en Sheet Informe: {e_informe}")
                                                 print(f"[ERROR] Sync Informe: {e_informe}")
                                         
-                                        # --- PASO 3: ACTUALIZACIÓN DE SHEET LLAMADAS (campo estado) ---
-                                        print(f"[DEBUG] Actualizando estado en Sheet Llamadas")
+                                        # --- PASO 3: ACTUALIZACIÓN SEGURA DE SHEET LLAMADAS (solo fila específica) ---
+                                        print(f"[DEBUG] Conference - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write("🔄 Actualizando estado en Sheet Llamadas...")
                                                 
-                                                # Actualizar el DataFrame completo y escribirlo de vuelta
-                                                if update_sheet(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas")
+                                                # Usar función segura que actualiza en el sheet compartido de salida
+                                                if update_call_status_safe(st.session_state.df_contactos, idx, final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.llamada_activa_sid or '', URL_SHEET_CONTACTOS):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
                                                     add_log(f"UPDATE_LLAMADAS: {c['nombre']} - {final_status}", "DATA")
                                                 else:
                                                     st.warning("⚠️ Error actualizando Sheet Llamadas")
-                                                    
                                             except Exception as e_llamadas:
                                                 st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
-                                                print(f"[ERROR] Update Llamadas: {e_llamadas}")
+                                                print(f"[ERROR] Conference Update Llamadas: {e_llamadas}")
                                         
                                         # --- PASO 4: LIMPIEZA DE ESTADO ---
                                         print(f"[DEBUG] Limpiando estado de llamada")
@@ -3453,14 +3642,14 @@ with tab_op:
                                     # Actualizar DataFrame local con notas acumuladas
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
                                     
-                                    # Actualizar Sheet Llamadas con función segura
+                                    # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
-                                            if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
+                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "NOTAS_ACUMULADAS"):
                                                 add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
-                                                st.success("✅ Notas acumuladas en Sheet Llamadas con seguridad")
+                                                st.success("✅ Notas acumuladas en ambos sheets (compartido y agente)")
                                             else:
-                                                st.warning("⚠️ Notas acumuladas localmente, pero error actualizando Sheet Llamadas")
+                                                st.warning("⚠️ Notas acumuladas localmente, pero error actualizando sheets")
                                         except Exception as e:
                                             st.error(f"❌ Error acumulando notas: {e}")
                                     else:
@@ -3483,20 +3672,20 @@ with tab_op:
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual  # Mantener notas acumuladas
                                     st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                     
-                                    # Actualizar Sheet Llamadas con función segura
+                                    # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
-                                            if update_sheet_safe(st.session_state.df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=st.session_state.agente_id):
+                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "PROGRAMADA"):
                                                 add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
-                                                st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} con seguridad")
+                                                st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} en ambos sheets")
                                                 # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS"
                                                 st.session_state.pestana_actual = "Programadas"
                                                 time.sleep(1)
                                                 st.rerun()
                                             else:
-                                                st.warning("⚠️ Programada localmente, pero error actualizando Sheet Llamadas")
+                                                st.warning("⚠️ Programada localmente, pero error actualizando sheets")
                                         except Exception as e:
-                                            st.error(f"❌ Error actualizando Sheet Llamadas: {e}")
+                                            st.error(f"❌ Error actualizando sheets: {e}")
                                             print(f"[ERROR] Programar llamada - Update Sheet: {e}")
                                     else:
                                         st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
