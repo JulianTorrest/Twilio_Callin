@@ -397,13 +397,52 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
             # Obtener worksheet
             worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
             
-            # Limpiar y actualizar
+            # Actualizar solo las filas específicas sin borrar todo el sheet
             rate_limiter.check_and_wait(operation_type="write")
-            worksheet.clear()
-            rate_limiter.check_and_wait(operation_type="write")
-            worksheet.update([df_sanitizado.columns.values.tolist()] + df_sanitizado.values.tolist())
             
-            print(f"[SECURITY] Sheet actualizado exitosamente por {agente_id}")
+            # En lugar de borrar todo, actualizar solo las filas necesarias
+            # Esto preserva otros contactos que puedan existir en el sheet
+            for idx, row in df_sanitizado.iterrows():
+                # Buscar la fila correspondiente en el sheet basándose en un identificador único
+                # Usar teléfono como identificador único para encontrar la fila correcta
+                telefono = str(row.get('telefono', ''))
+                if telefono:
+                    # Intentar encontrar la fila existente
+                    try:
+                        rate_limiter.check_and_wait(operation_type="read")
+                        existing_data = worksheet.get_all_records()
+                        
+                        # Buscar fila existente por teléfono
+                        target_row = None
+                        for i, existing_row in enumerate(existing_data):
+                            if str(existing_row.get('telefono', '')) == telefono:
+                                target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
+                                break
+                        
+                        # Si no se encuentra, agregar al final
+                        if target_row is None:
+                            target_row = len(existing_data) + 2
+                        
+                        # Preparar datos de la fila
+                        row_data = row.values.tolist()
+                        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
+                        
+                        # Actualizar solo esta fila específica
+                        rate_limiter.check_and_wait(operation_type="write")
+                        worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
+                        
+                        print(f"[DEBUG] Fila {target_row} actualizada para teléfono {telefono}")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Error actualizando fila específica para {telefono}: {e}")
+                        # Fallback: agregar al final si hay error
+                        try:
+                            rate_limiter.check_and_wait(operation_type="write")
+                            worksheet.append_row(row.values.tolist())
+                        except Exception as e2:
+                            print(f"[ERROR] Error en fallback append: {e2}")
+            
+            print(f"[SECURITY] Sheet actualizado exitosamente por {agente_id} (actualización targeted)")
             return True
             
         finally:
@@ -626,15 +665,81 @@ def update_call_status_safe(df_contactos, idx, nuevo_estado, observacion, duraci
         print(f"[ERROR] Error en update_call_status_safe: {e}")
         return False
 
-def update_both_sheets_safe(df_contactos, agente_id, operation_type="general"):
+def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
+    """
+    Actualiza solo un contacto específico en el sheet sin afectar otros registros.
+    Busca el contacto por teléfono y actualiza solo esa fila.
+    
+    Args:
+        df_contactos: DataFrame de contactos
+        idx: Índice del contacto a actualizar
+        sheet_url: URL del Google Sheet
+        agente_id: ID del agente
+        operation_type: Tipo de operación para logging
+    
+    Returns:
+        bool: True si la actualización fue exitosa
+    """
+    try:
+        # Verificar rate limit
+        rate_limiter.check_and_wait(operation_type="write")
+        
+        # Obtener datos del contacto específico
+        contact_data = df_contactos.iloc[idx]
+        telefono = str(contact_data.get('telefono', ''))
+        
+        if not telefono:
+            print(f"[ERROR] {operation_type} - No hay teléfono para identificar el contacto")
+            return False
+        
+        # Abrir el spreadsheet
+        spreadsheet = gc.open_by_url(sheet_url)
+        worksheet = spreadsheet.get_worksheet(0)
+        
+        # Buscar la fila del contacto por teléfono
+        rate_limiter.check_and_wait(operation_type="read")
+        existing_data = worksheet.get_all_records()
+        
+        target_row = None
+        for i, existing_row in enumerate(existing_data):
+            if str(existing_row.get('telefono', '')) == telefono:
+                target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
+                break
+        
+        # Si no se encuentra, agregar al final
+        if target_row is None:
+            target_row = len(existing_data) + 2
+            print(f"[DEBUG] {operation_type} - Contacto {telefono} no encontrado, agregando en fila {target_row}")
+        else:
+            print(f"[DEBUG] {operation_type} - Actualizando contacto {telefono} en fila {target_row}")
+        
+        # Preparar datos de la fila
+        row_data = contact_data.values.tolist()
+        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
+        
+        # Actualizar solo esta fila específica
+        rate_limiter.check_and_wait(operation_type="write")
+        worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
+        
+        print(f"[DEBUG] {operation_type} - Fila {target_row} actualizada exitosamente para {telefono}")
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] {operation_type} - Error actualizando contacto específico: {e}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return False
+
+def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", contact_idx=None):
     """
     Actualiza tanto el sheet compartido como el sheet específico del agente.
-    Usado para notas acumuladas y llamadas programadas.
+    MODIFICADO: Ahora actualiza solo contactos específicos en lugar de sobreescribir todo.
     
     Args:
         df_contactos: DataFrame de contactos
         agente_id: ID del agente
         operation_type: Tipo de operación para logging
+        contact_idx: Índice específico del contacto a actualizar (opcional)
     
     Returns:
         bool: True si ambas actualizaciones fueron exitosas
@@ -643,13 +748,25 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general"):
         success_shared = False
         success_agent = False
         
+        # Determinar qué contactos actualizar
+        if contact_idx is not None:
+            # Actualizar solo un contacto específico
+            contacts_to_update = [contact_idx]
+        else:
+            # Actualizar todos los contactos del DataFrame local
+            contacts_to_update = df_contactos.index.tolist()
+        
         # 1. Actualizar sheet compartido (output)
         try:
-            if update_sheet_safe(df_contactos, "0", sheet_url=URL_SHEET_CONTACTOS, agente_id=agente_id):
-                success_shared = True
+            all_shared_success = True
+            for idx in contacts_to_update:
+                if not update_contact_in_sheet_safe(df_contactos, idx, URL_SHEET_CONTACTOS, agente_id, f"{operation_type}_SHARED"):
+                    all_shared_success = False
+                    print(f"[ERROR] {operation_type} - Error actualizando contacto {idx} en sheet compartido")
+            
+            success_shared = all_shared_success
+            if success_shared:
                 print(f"[DEBUG] {operation_type} - Sheet compartido actualizado exitosamente")
-            else:
-                print(f"[ERROR] {operation_type} - Error actualizando sheet compartido")
         except Exception as e:
             print(f"[ERROR] {operation_type} - Error en sheet compartido: {e}")
         
@@ -657,11 +774,15 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general"):
         try:
             agent_sheet_url = get_agent_sheet_url(agente_id)
             if agent_sheet_url != URL_SHEET_CONTACTOS:  # Solo si tiene sheet específico
-                if update_sheet_safe(df_contactos, "0", sheet_url=agent_sheet_url, agente_id=agente_id):
-                    success_agent = True
+                all_agent_success = True
+                for idx in contacts_to_update:
+                    if not update_contact_in_sheet_safe(df_contactos, idx, agent_sheet_url, agente_id, f"{operation_type}_AGENT"):
+                        all_agent_success = False
+                        print(f"[ERROR] {operation_type} - Error actualizando contacto {idx} en sheet del agente")
+                
+                success_agent = all_agent_success
+                if success_agent:
                     print(f"[DEBUG] {operation_type} - Sheet del agente {agente_id} actualizado exitosamente")
-                else:
-                    print(f"[ERROR] {operation_type} - Error actualizando sheet del agente {agente_id}")
             else:
                 success_agent = True  # No hay sheet específico, solo usar compartido
                 print(f"[DEBUG] {operation_type} - Agente {agente_id} usa solo sheet compartido")
@@ -3730,7 +3851,7 @@ with tab_op:
                                     # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
-                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "NOTAS_ACUMULADAS"):
+                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "NOTAS_ACUMULADAS", contact_idx=idx):
                                                 add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
                                                 st.success("✅ Notas acumuladas en ambos sheets (compartido y agente)")
                                             else:
@@ -3760,7 +3881,7 @@ with tab_op:
                                     # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
-                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "PROGRAMADA"):
+                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "PROGRAMADA", contact_idx=idx):
                                                 add_log(f"PROGRAMADA: {c['nombre']} para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
                                                 st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} en ambos sheets")
                                                 # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS"
