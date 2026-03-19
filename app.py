@@ -1921,6 +1921,8 @@ if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
 if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
 if 'numero_celular_agente' not in st.session_state: st.session_state.numero_celular_agente = None
+if 'en_pausa' not in st.session_state: st.session_state.en_pausa = False
+if 'pausa_inicio' not in st.session_state: st.session_state.pausa_inicio = None
 
 # Estados para control de refresh inteligente
 if 'usuario_interactuando' not in st.session_state: st.session_state.usuario_interactuando = False
