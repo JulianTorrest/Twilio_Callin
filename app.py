@@ -2979,14 +2979,7 @@ with tab_op:
                                         # TwiML para el cliente (con beep de entrada para el agente y manejo de no contestación)
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Dial action="{function_url}/dial-status" method="POST" timeout="25">
-                                                <Number 
-                                                    url="{function_url}/machine-detection" 
-                                                    machineDetection="Enable" 
-                                                    machineDetectionTimeout="3000"
-                                                    statusCallbackEvent="initiated ringing answered completed"
-                                                    statusCallback="{function_url}/status"
-                                                >{tel}</Number>
+                                            <Dial>
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
@@ -3023,7 +3016,6 @@ with tab_op:
                                         )
                                         
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
-                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                         st.session_state.llamada_activa_sid = call_cliente.sid
                                         st.session_state.conference_name = conference_name
                                         st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
