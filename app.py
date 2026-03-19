@@ -2966,10 +2966,10 @@ with tab_op:
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
                                                     record="record-from-start"
-                                                    recordingStatusCallback="{function_url}/recording-status"
+                                                    recordingStatusCallback="{function_url_base}/recording-status"
                                                     trim="trim-silence"
                                                     transcribe="true"
-                                                    transcribeCallback="{function_url}/transcription-callback"
+                                                    transcribeCallback="{function_url_base}/transcription-callback"
                                                     waitUrl=""
                                                     beep="true"
                                                 >{conference_name}</Conference>
@@ -2984,10 +2984,10 @@ with tab_op:
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
                                                     record="record-from-start"
-                                                    recordingStatusCallback="{function_url}/recording-status"
+                                                    recordingStatusCallback="{function_url_base}/recording-status"
                                                     trim="trim-silence"
                                                     transcribe="true"
-                                                    transcribeCallback="{function_url}/transcription-callback"
+                                                    transcribeCallback="{function_url_base}/transcription-callback"
                                                     waitUrl=""
                                                     beep="true"
                                                 >{conference_name}</Conference>
@@ -2999,7 +2999,7 @@ with tab_op:
                                             twiml=twiml_agente,
                                             to=st.session_state.numero_celular_agente,
                                             from_=twilio_number,
-                                            status_callback=f"{function_url}/status",
+                                            status_callback=f"{function_url_base}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
@@ -3011,7 +3011,7 @@ with tab_op:
                                             to=tel,
                                             from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
                                             machine_detection='Enable',
-                                            status_callback=f"{function_url}/status",
+                                            status_callback=f"{function_url_base}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
