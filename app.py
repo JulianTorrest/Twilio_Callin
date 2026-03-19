@@ -1789,8 +1789,10 @@ if 'agente_id' not in st.session_state:
     st.stop()
 
 # Inicialización explícita de estados (Mantenemos cada uno de tus estados)
+if 'agente_id' not in st.session_state: st.session_state.agente_id = None
 if 'df_contactos' not in st.session_state: st.session_state.df_contactos = None
-if 'en_pausa' not in st.session_state: st.session_state.en_pausa = False
+if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
+if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
 if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
 if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
 if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
@@ -1798,6 +1800,12 @@ if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
 if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
 if 'numero_celular_agente' not in st.session_state: st.session_state.numero_celular_agente = None
+
+# Estados para control de refresh inteligente
+if 'usuario_interactuando' not in st.session_state: st.session_state.usuario_interactuando = False
+if 'ultima_interaccion' not in st.session_state: st.session_state.ultima_interaccion = time.time()
+if 'refresh_pausado' not in st.session_state: st.session_state.refresh_pausado = False
+if 'ultimo_refresh_llamada' not in st.session_state: st.session_state.ultimo_refresh_llamada = 0
 if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
 if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = None
 if 'webrtc_nombre' not in st.session_state: st.session_state.webrtc_nombre = None
@@ -1831,6 +1839,43 @@ def marcar_cambios_pendientes():
     """Marca que hay cambios pendientes para auto-guardar"""
     st.session_state.cambios_pendientes = True
     print("[DEBUG] Cambios pendientes marcados para auto-guardado")
+
+# Función para detectar interacción del usuario
+def detectar_interaccion_usuario():
+    """Detecta si el usuario está interactuando con la interfaz"""
+    # Marcar interacción cuando hay cambios en session_state
+    if hasattr(st.session_state, '_last_widget_state'):
+        current_state = {k: v for k, v in st.session_state.items() if not k.startswith('_')}
+        if current_state != st.session_state._last_widget_state:
+            st.session_state.usuario_interactuando = True
+            st.session_state.ultima_interaccion = time.time()
+            print(f"[DEBUG] Interacción detectada - Pausando refresh agresivo")
+    
+    st.session_state._last_widget_state = {k: v for k, v in st.session_state.items() if not k.startswith('_')}
+    
+    # Si han pasado más de 3 segundos sin interacción, permitir refresh
+    if time.time() - st.session_state.ultima_interaccion > 3:
+        st.session_state.usuario_interactuando = False
+
+def refresh_inteligente_llamada(forzar=False):
+    """Refresh inteligente que respeta la interacción del usuario"""
+    detectar_interaccion_usuario()
+    
+    # Si el usuario está interactuando, usar refresh menos agresivo
+    if st.session_state.usuario_interactuando and not forzar:
+        # Refresh cada 5 segundos cuando el usuario está interactuando
+        if time.time() - st.session_state.ultimo_refresh_llamada > 5:
+            st.session_state.ultimo_refresh_llamada = time.time()
+            print(f"[DEBUG] Refresh suave - Usuario interactuando")
+            time.sleep(1)
+            st.rerun()
+    else:
+        # Refresh normal cada 2 segundos cuando no hay interacción
+        if time.time() - st.session_state.ultimo_refresh_llamada > 2:
+            st.session_state.ultimo_refresh_llamada = time.time()
+            print(f"[DEBUG] Refresh normal - Sin interacción")
+            time.sleep(1)
+            st.rerun()
 
 # Ejecutar verificación de auto-guardado en cada refresh
 verificar_autoguardado()
@@ -2798,23 +2843,29 @@ with tab_op:
                                                 
                                                 # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
                                                 
-                                                # PRIORIDAD ALTA 1: Número inválido/inexistente
-                                                if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
+                                                # PRIORIDAD ALTA 1: Número inválido/inexistente (códigos ampliados)
+                                                if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.error(f"❌ Número inválido o inexistente (error {error_code})")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
                                                 
-                                                # PRIORIDAD MEDIA 1: Número bloqueado/spam
-                                                elif remote_call.status == 'failed' and error_code in ['21610', '30006']:
+                                                # PRIORIDAD MEDIA 1: Número bloqueado/spam/no entregado
+                                                elif remote_call.status == 'failed' and error_code in ['21610', '30006', '30004']:
                                                     webrtc_final_status = 'No Contesto'
-                                                    st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
-                                                    print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado: {error_code}")
+                                                    st.error(f"🚫 Número bloqueado, spam o mensaje no entregado (error {error_code})")
+                                                    print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado/no entregado: {error_code}")
                                                 
                                                 # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
                                                 elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
+                                                
+                                                # Estados intermedios - Llamada en progreso
+                                                elif remote_call.status in ['in-progress', 'queued', 'ringing']:
+                                                    webrtc_final_status = 'Llamado'  # Asumimos que está en progreso
+                                                    st.info(f"📞 Llamada en progreso: {remote_call.status}")
+                                                    print(f"[DEBUG] Clasificado como Llamado - Estado intermedio: {remote_call.status}")
                                                 
                                                 # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
                                                 elif remote_call.status in ['no-answer', 'busy', 'canceled']:
@@ -2828,24 +2879,27 @@ with tab_op:
                                                     st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
                                                 
-                                                # PRIORIDAD ALTA 3: Buzón de voz mejorado
-                                                elif answered_by in ['machine_start', 'fax']:
+                                                # PRIORIDAD ALTA 3: Buzón de voz mejorado (detección ampliada)
+                                                elif answered_by in ['machine_start', 'machine_end_beep', 'machine_end_silence', 'fax']:
                                                     if duracion_twilio < 5:
                                                         webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s)")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno")
+                                                        st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno - Tipo: {answered_by}")
                                                     else:
                                                         webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s)")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz")
+                                                        st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz - Tipo: {answered_by}")
                                                 
-                                                # Caso 3: Contestó una persona (humano)
+                                                # Caso 3: Contestó una persona (humano) - Validación de duración
                                                 elif answered_by == 'human':
+                                                    if duracion_twilio >= 300:  # 5 minutos o más
+                                                        st.info(f"📞 Conversación larga detectada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                        print(f"[DEBUG] Conversación larga: {duracion_twilio}s")
                                                     webrtc_final_status = 'Llamado'
-                                                    st.success(f"✅ Llamada contestada por persona")
-                                                    print(f"[DEBUG] Clasificado como Llamado por humano")
+                                                    st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
+                                                    print(f"[DEBUG] Clasificado como Llamado por humano - Duración: {duracion_twilio}s")
                                                 
-                                                # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
+                                                # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
                                                 elif remote_call.status == 'completed' and answered_by == 'unknown':
                                                     if duracion_twilio == 0:
                                                         webrtc_final_status = 'No Contesto'
@@ -2859,6 +2913,14 @@ with tab_op:
                                                         webrtc_final_status = 'No Contesto'
                                                         st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
                                                         print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
+                                                    elif duracion_twilio == 10:
+                                                        webrtc_final_status = 'Llamado'
+                                                        st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
+                                                        print(f"[DEBUG] Clasificado como Llamado - Duración límite exacto: 10s")
+                                                    elif duracion_twilio >= 300:  # 5 minutos o más
+                                                        webrtc_final_status = 'Llamado'
+                                                        st.success(f"✅ Conversación larga ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                        print(f"[DEBUG] Clasificado como Llamado - Conversación larga: {duracion_twilio}s")
                                                     else:
                                                         webrtc_final_status = 'Llamado'
                                                         st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
@@ -3174,9 +3236,8 @@ with tab_op:
                                         time.sleep(2)
                                         st.rerun()
                                     else:
-                                        # Auto-refresh para actualizar cronómetro y detectar cambios de estado
-                                        time.sleep(1)
-                                        st.rerun()
+                                        # Refresh inteligente que respeta la interacción del usuario
+                                        refresh_inteligente_llamada()
 
                                 # Monitor para Conference Call Y si este es el contacto activo
                             if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
@@ -3306,8 +3367,8 @@ with tab_op:
                                                     else:
                                                         st.error("Error guardando en Sheet Informe")
                                                     
-                                                    time.sleep(1)
-                                                    st.rerun()
+                                                    # Usar refresh inteligente para pausar grabación
+                                                    refresh_inteligente_llamada(forzar=True)
                                             except Exception as e:
                                                 st.error(f"Error pausando grabación: {e}")
                                     else:
@@ -3346,21 +3407,27 @@ with tab_op:
                                         if st.session_state.get('finalizacion_manual_agente', False):
                                             final_status = 'Gestionada'
                                             print(f"[DEBUG] Conference - Finalización manual por agente - Clasificado como Gestionada")
-                                        # PRIORIDAD ALTA 2: Número inválido/inexistente
-                                        elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612']:
+                                        # PRIORIDAD ALTA 2: Número inválido/inexistente (códigos ampliados)
+                                        elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
                                             final_status = 'No Contesto'
                                             st.error(f"❌ Número inválido o inexistente (error {error_code})")
                                             print(f"[DEBUG] Conference - Clasificado como No Contesto - Número inválido: {error_code}")
-                                        # PRIORIDAD MEDIA 1: Número bloqueado/spam
-                                        elif remote.status == 'failed' and error_code in ['21610', '30006']:
+                                        # PRIORIDAD MEDIA 1: Número bloqueado/spam/no entregado
+                                        elif remote.status == 'failed' and error_code in ['21610', '30006', '30004']:
                                             final_status = 'No Contesto'
-                                            st.error(f"🚫 Número bloqueado o marcado como spam (error {error_code})")
-                                            print(f"[DEBUG] Conference - Clasificado como No Contesto - Número bloqueado: {error_code}")
+                                            st.error(f"🚫 Número bloqueado, spam o mensaje no entregado (error {error_code})")
+                                            print(f"[DEBUG] Conference - Clasificado como No Contesto - Número bloqueado/no entregado: {error_code}")
                                         # PRIORIDAD MEDIA 2: Error de red
                                         elif remote.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
                                             final_status = 'No Contesto'
                                             st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
                                             print(f"[DEBUG] Conference - Clasificado como No Contesto - Error de red: {error_code}")
+                                        # Estados intermedios - Llamada en progreso
+                                        elif remote.status in ['in-progress', 'queued', 'ringing']:
+                                            final_status = 'Llamado'  # Asumimos que está en progreso
+                                            st.info(f"📞 Llamada en progreso: {remote.status}")
+                                            print(f"[DEBUG] Conference - Clasificado como Llamado - Estado intermedio: {remote.status}")
+                                        
                                         # Caso 1: No contestó, ocupado, cancelado
                                         elif remote.status in ['no-answer', 'busy', 'canceled']:
                                             final_status = 'No Contesto'
@@ -3369,33 +3436,51 @@ with tab_op:
                                         elif remote.status == 'failed':
                                             final_status = 'No Contesto'
                                             print(f"[DEBUG] Conference - Fallo genérico: {error_code}")
-                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado
-                                        elif answered_by in ['machine_start', 'fax']:
+                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado (detección ampliada)
+                                        elif answered_by in ['machine_start', 'machine_end_beep', 'machine_end_silence', 'fax']:
                                             if duracion_twilio < 5:
                                                 final_status = 'No Contesto'
-                                                print(f"[DEBUG] Conference - Buzón lleno")
+                                                st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                print(f"[DEBUG] Conference - Buzón lleno - Tipo: {answered_by}")
                                             else:
                                                 final_status = 'No Contesto'
-                                                print(f"[DEBUG] Conference - Buzón de voz")
+                                                st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                print(f"[DEBUG] Conference - Buzón de voz - Tipo: {answered_by}")
                                         
-                                        # Caso 3: Contestó persona
+                                        # Caso 3: Contestó persona - Validación de duración
                                         elif answered_by == 'human':
+                                            if duracion_twilio >= 300:  # 5 minutos o más
+                                                st.info(f"📞 Conversación larga detectada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                print(f"[DEBUG] Conference - Conversación larga: {duracion_twilio}s")
                                             final_status = 'Llamado'
-                                            print(f"[DEBUG] Conference - Detectado como humano")
+                                            st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
+                                            print(f"[DEBUG] Conference - Detectado como humano - Duración: {duracion_twilio}s")
                                         
-                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó
+                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
                                         elif remote.status == 'completed' and answered_by == 'unknown':
                                             if duracion_twilio == 0:
                                                 final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada sin conexión (0s)")
                                                 print(f"[DEBUG] Conference - Sin conexión")
                                             elif 0 < duracion_twilio < 3:
                                                 final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
                                                 print(f"[DEBUG] Conference - Rechazó inmediatamente: {duracion_twilio}s")
                                             elif 3 <= duracion_twilio < 10:
                                                 final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
                                                 print(f"[DEBUG] Conference - Duración muy corta: {duracion_twilio}s")
+                                            elif duracion_twilio == 10:
+                                                final_status = 'Llamado'
+                                                st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
+                                                print(f"[DEBUG] Conference - Duración límite exacto: 10s")
+                                            elif duracion_twilio >= 300:  # 5 minutos o más
+                                                final_status = 'Llamado'
+                                                st.success(f"✅ Conversación larga ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                print(f"[DEBUG] Conference - Conversación larga: {duracion_twilio}s")
                                             else:
                                                 final_status = 'Llamado'
+                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
                                                 print(f"[DEBUG] Conference - Conversación establecida: {duracion_twilio}s")
                                         
                                         # Caso por defecto
@@ -3680,8 +3765,8 @@ with tab_op:
                                                 st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')} en ambos sheets")
                                                 # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS"
                                                 st.session_state.pestana_actual = "Programadas"
-                                                time.sleep(1)
-                                                st.rerun()
+                                                # Usar refresh inteligente para programación
+                                                refresh_inteligente_llamada(forzar=True)
                                             else:
                                                 st.warning("⚠️ Programada localmente, pero error actualizando sheets")
                                         except Exception as e:
@@ -3691,11 +3776,8 @@ with tab_op:
                                         st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
                                         # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" (incluso sin Sheet)
                                         st.session_state.pestana_actual = "Programadas"
-                                        time.sleep(1)
-                                        st.rerun()
-                                    
-                                    time.sleep(1)
-                                    st.rerun()
+                                        # Usar refresh inteligente para programación
+                                        refresh_inteligente_llamada(forzar=True)
         else:
             st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
     else:
