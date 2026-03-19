@@ -1956,6 +1956,155 @@ def verificar_autoguardado():
             except Exception as e:
                 print(f"[AUTOGUARDADO] ❌ Error: {e}")
 
+def mostrar_historial_notas_visual(contacto, idx):
+    """
+    Muestra el historial completo de notas de un contacto de forma visual
+    con timestamps, categorías y separación clara entre cada nota.
+    """
+    notas_completas = str(contacto.get('observacion', '')) if pd.notna(contacto.get('observacion')) else ''
+    
+    if notas_completas and notas_completas.strip():
+        with st.expander(f"📋 Historial Completo de Notas - {contacto['nombre']}", expanded=False):
+            # Parsear notas separadas por " | "
+            notas_individuales = notas_completas.split(' | ')
+            
+            st.markdown("**📝 Cronología de todas las notas (más reciente primero):**")
+            
+            import re
+            for i, nota_individual in enumerate(reversed(notas_individuales)):
+                nota_individual = nota_individual.strip()
+                if nota_individual:
+                    # Detectar timestamp [YYYY-MM-DD HH:MM] y categoría (Categoría)
+                    timestamp_categoria_match = re.search(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*\(([^)]+)\)', nota_individual)
+                    timestamp_solo_match = re.search(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]', nota_individual)
+                    
+                    if timestamp_categoria_match:
+                        # Formato nuevo: [timestamp] (categoría) nota
+                        timestamp = timestamp_categoria_match.group(1)
+                        categoria = timestamp_categoria_match.group(2)
+                        nota_texto = nota_individual.replace(f'[{timestamp}] ({categoria})', '').strip()
+                        
+                        # Colores por categoría
+                        if categoria == 'Pendiente':
+                            border_color = '#ffc107'  # Amarillo
+                            bg_color = '#fff8e1'
+                            categoria_icon = '⏳'
+                        elif categoria == 'No Contesto':
+                            border_color = '#dc3545'  # Rojo
+                            bg_color = '#ffebee'
+                            categoria_icon = '📞❌'
+                        elif categoria == 'Llamado':
+                            border_color = '#17a2b8'  # Azul
+                            bg_color = '#e1f5fe'
+                            categoria_icon = '📞✅'
+                        elif categoria == 'Gestionada':
+                            border_color = '#28a745'  # Verde
+                            bg_color = '#e8f5e8'
+                            categoria_icon = '✅'
+                        elif categoria == 'Programada':
+                            border_color = '#6f42c1'  # Púrpura
+                            bg_color = '#f3e5f5'
+                            categoria_icon = '📅'
+                        else:
+                            border_color = '#6c757d'  # Gris
+                            bg_color = '#f8f9fa'
+                            categoria_icon = '📝'
+                        
+                        orden_badge = "🟢 **MÁS RECIENTE**" if i == 0 else f"#{len(notas_individuales) - i}"
+                        
+                        st.markdown(f"""
+                        <div style="
+                            border-left: 4px solid {border_color}; 
+                            padding: 12px; 
+                            margin: 8px 0; 
+                            background-color: {bg_color};
+                            border-radius: 8px;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        ">
+                            <div style="font-size: 12px; color: #666; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span><strong>{orden_badge}</strong></span>
+                                <span>📅 {timestamp}</span>
+                            </div>
+                            <div style="font-size: 13px; color: #444; margin-bottom: 6px;">
+                                <strong>{categoria_icon} Categoría: {categoria}</strong>
+                            </div>
+                            <div style="font-size: 14px; color: #222; line-height: 1.4;">
+                                {nota_texto}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    elif timestamp_solo_match:
+                        # Formato anterior: [timestamp] nota
+                        timestamp = timestamp_solo_match.group(1)
+                        nota_texto = nota_individual.replace(f'[{timestamp}]', '').strip()
+                        
+                        orden_badge = "🟡 **RECIENTE**" if i == 0 else f"#{len(notas_individuales) - i}"
+                        
+                        st.markdown(f"""
+                        <div style="
+                            border-left: 4px solid #1f77b4; 
+                            padding: 12px; 
+                            margin: 8px 0; 
+                            background-color: #f8f9fa;
+                            border-radius: 8px;
+                        ">
+                            <div style="font-size: 12px; color: #666; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span><strong>{orden_badge}</strong></span>
+                                <span>📅 {timestamp}</span>
+                            </div>
+                            <div style="font-size: 13px; color: #444; margin-bottom: 6px;">
+                                <strong>📝 Nota sin categoría específica</strong>
+                            </div>
+                            <div style="font-size: 14px; color: #222; line-height: 1.4;">
+                                {nota_texto}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        # Nota sin timestamp (muy antigua)
+                        orden_badge = "📄 **HISTÓRICA**" if i == len(notas_individuales) - 1 else f"#{len(notas_individuales) - i}"
+                        
+                        st.markdown(f"""
+                        <div style="
+                            border-left: 4px solid #28a745; 
+                            padding: 12px; 
+                            margin: 8px 0; 
+                            background-color: #f1f8e9;
+                            border-radius: 8px;
+                        ">
+                            <div style="font-size: 12px; color: #666; margin-bottom: 8px;">
+                                <strong>{orden_badge}</strong> • Sin timestamp
+                            </div>
+                            <div style="font-size: 14px; color: #222; line-height: 1.4;">
+                                {nota_individual}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            # Mostrar estadísticas del historial
+            total_notas = len([n for n in notas_individuales if n.strip()])
+            categorias_detectadas = set()
+            for nota in notas_individuales:
+                categoria_match = re.search(r'\([^)]+\)', nota)
+                if categoria_match:
+                    categorias_detectadas.add(categoria_match.group(0).strip('()'))
+            
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📊 Total Notas", total_notas)
+            with col2:
+                st.metric("🔄 Categorías", len(categorias_detectadas) if categorias_detectadas else 1)
+            with col3:
+                st.metric("📍 Estado Actual", contacto.get('estado', 'Sin estado'))
+            
+            if categorias_detectadas:
+                st.caption(f"🏷️ **Categorías registradas:** {', '.join(sorted(categorias_detectadas))}")
+    else:
+        st.info("📝 Sin notas registradas para este contacto")
+        st.caption("💡 **Tip:** Las notas se guardan automáticamente con timestamp y categoría cuando presiona 'Guardar Notas'")
+
 def marcar_cambios_pendientes():
     """Marca que hay cambios pendientes para auto-guardar"""
     st.session_state.cambios_pendientes = True
@@ -2770,17 +2919,23 @@ with tab_op:
                                 st.info(f"📅 Programado para: {c['proxima_llamada']}")
                         
                         st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
-                        nota_existente = st.session_state.draft_notas.get(idx, c['observacion'])
-                        nota = st.text_area("📝 Notas:", value=nota_existente, key=f"notas_{idx}")
+                        
+                        # Mostrar historial completo de notas con categorías
+                        mostrar_historial_notas_visual(c, idx)
+                        
+                        nota_existente = st.session_state.draft_notas.get(idx, '')
+                        nota = st.text_area("📝 Nueva Nota:", value=nota_existente, key=f"notas_{idx}", placeholder="Escriba aquí sus observaciones...")
                         
                         # Auto-guardar cuando el agente modifica notas
                         if nota != nota_existente:
-                            # Actualizar nota local inmediatamente
-                            st.session_state.df_contactos.at[idx, 'observacion'] = nota
-                            # Marcar para auto-guardado
-                            marcar_cambios_pendientes()
-                        
-                        st.session_state.draft_notas[idx] = nota
+                            # Guardar en draft para evitar pérdida de datos
+                            st.session_state.draft_notas[idx] = nota
+                            # Limpiar draft después de guardar
+                            if idx in st.session_state.draft_notas:
+                                del st.session_state.draft_notas[idx]
+                            
+                            # Forzar refresh para mostrar el historial actualizado
+                            refresh_inteligente_llamada(forzar=True)
 
                     with col2:
                         if not st.session_state.en_pausa:
@@ -3837,13 +3992,17 @@ with tab_op:
                                     # Combinar notas si ya existe algo
                                     if nota_existente and nota_existente.strip():
                                         if nota.strip() and nota != nota_existente:
-                                            # Acumular notas con timestamp
+                                            # Acumular notas con timestamp y contexto de categoría
                                             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-                                            nota_acumulada = f"{nota_existente} | [{timestamp}] {nota}"
+                                            categoria_actual = st.session_state.df_contactos.at[idx, 'estado'] if 'estado' in st.session_state.df_contactos.columns else 'Sin categoría'
+                                            nota_acumulada = f"{nota_existente} | [{timestamp}] ({categoria_actual}) {nota}"
                                         else:
                                             nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
                                     else:
-                                        nota_acumulada = nota  # Usar nueva nota si no existe nada
+                                        # Agregar timestamp y categoría a la primera nota
+                                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                        categoria_actual = st.session_state.df_contactos.at[idx, 'estado'] if 'estado' in st.session_state.df_contactos.columns else 'Sin categoría'
+                                        nota_acumulada = f"[{timestamp}] ({categoria_actual}) {nota}"  # Primera nota con timestamp y categoría
                                     
                                     # Actualizar DataFrame local con notas acumuladas
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
