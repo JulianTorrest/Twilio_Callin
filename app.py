@@ -2973,14 +2973,21 @@ with tab_op:
                         
                         # Auto-guardar cuando el agente modifica notas
                         if nota != nota_existente:
-                            # Guardar en draft para evitar pérdida de datos
-                            st.session_state.draft_notas[idx] = nota
-                            # Limpiar draft después de guardar
-                            if idx in st.session_state.draft_notas:
-                                del st.session_state.draft_notas[idx]
-                            
-                            # Forzar refresh para mostrar el historial actualizado
-                            refresh_inteligente_llamada(forzar=True)
+                            # 🔍 VALIDACIÓN ANTES DE AUTO-GUARDAR
+                            if idx >= len(st.session_state.df_contactos):
+                                print(f"[DEBUG] Índice inválido en auto-guardado: {idx}")
+                                # Limpiar draft inválido
+                                if idx in st.session_state.draft_notas:
+                                    del st.session_state.draft_notas[idx]
+                            else:
+                                # Guardar en draft para evitar pérdida de datos
+                                st.session_state.draft_notas[idx] = nota
+                                # Limpiar draft después de guardar
+                                if idx in st.session_state.draft_notas:
+                                    del st.session_state.draft_notas[idx]
+                                
+                                # Forzar refresh para mostrar el historial actualizado
+                                refresh_inteligente_llamada(forzar=True)
 
                     with col2:
                         if not st.session_state.en_pausa:
@@ -2991,6 +2998,49 @@ with tab_op:
                                 # Botón único de llamada con Conference Call (ACTIVO)
                                 if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True, key=f"call_{idx}"):
                                     try:
+                                        # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
+                                        print(f"[DEBUG] Botón Conference Call presionado - idx: {idx}")
+                                        print(f"[DEBUG] Contacto actual: {c['nombre']} - {tel}")
+                                        print(f"[DEBUG] Total contactos en sesión: {len(st.session_state.df_contactos)}")
+                                        print(f"[DEBUG] Índice válido: {0 <= idx < len(st.session_state.df_contactos)}")
+                                        
+                                        # Validar que el índice sea válido
+                                        if idx >= len(st.session_state.df_contactos) or idx < 0:
+                                            st.error(f"❌ ERROR: Índice inválido ({idx}) para el contacto")
+                                            st.error(f"❌ Total contactos disponibles: {len(st.session_state.df_contactos)}")
+                                            add_log(f"CONFERENCE_ERROR - Índice inválido: {idx}", "ERROR")
+                                            st.stop()
+                                        
+                                        # Validar que el contacto exista y tenga datos
+                                        if 'nombre' not in c or 'telefono' not in c:
+                                            st.error(f"❌ ERROR: Contacto incompleto")
+                                            st.error(f"❌ Datos: {c}")
+                                            add_log(f"CONFERENCE_ERROR - Contacto incompleto: {c}", "ERROR")
+                                            st.stop()
+                                        
+                                        # Validar que no haya llamada activa
+                                        if st.session_state.llamada_activa_sid is not None:
+                                            st.error(f"❌ ERROR: Ya hay una llamada activa")
+                                            st.error(f"❌ SID activo: {st.session_state.llamada_activa_sid}")
+                                            add_log(f"CONFERENCE_ERROR - Llamada ya activa: {st.session_state.llamada_activa_sid}", "ERROR")
+                                            st.stop()
+                                        
+                                        # Validar número del agente
+                                        if not st.session_state.numero_celular_agente:
+                                            st.error(f"❌ ERROR: No hay número de agente configurado")
+                                            add_log(f"CONFERENCE_ERROR - Sin número de agente", "ERROR")
+                                            st.stop()
+                                        
+                                        # 🔥 GUARDAR ESTADO CRÍTICO ANTES DE LA LLAMADA
+                                        contacto_backup = {
+                                            'nombre': c['nombre'],
+                                            'telefono': tel,
+                                            'indice': idx,
+                                            'timestamp': datetime.now().isoformat()
+                                        }
+                                        st.session_state.contacto_llamada_actual = contacto_backup
+                                        print(f"[DEBUG] Contacto backup guardado: {contacto_backup}")
+                                        
                                         # Crear conference call: Twilio llama primero al agente, luego al cliente
                                         # El cliente verá el número del agente como Caller ID
                                          
@@ -3094,15 +3144,23 @@ with tab_op:
                                         
                                         # 🔍 VERIFICACIÓN POST-LLAMADA
                                         print(f"[TWILIO_RESPONSE] Llamada creada con SID: {call_cliente.sid}")
-                                        print(f"[TWILIO_RESPONSE] from_ usado: {call_cliente.from_}")
-                                        print(f"[TWILIO_RESPONSE] to: {call_cliente.to}")
                                         
-                                        # Alerta si hay discrepancia
-                                        if str(call_cliente.from_) != str(numero_agente):
-                                            st.error(f"⚠️ DISCREPANCIA DETECTADA:")
-                                            st.error(f"⚠️ Esperado: {numero_agente}")
-                                            st.error(f"⚠️ Real: {call_cliente.from_}")
-                                            add_log(f"CALLER_ID_DISCREPANCY - Esperado: {numero_agente} - Real: {call_cliente.from_}", "ERROR")
+                                        # Obtener atributos de forma segura
+                                        try:
+                                            call_from = getattr(call_cliente, 'from', 'N/A')
+                                            call_to = getattr(call_cliente, 'to', 'N/A')
+                                            print(f"[TWILIO_RESPONSE] from usado: {call_from}")
+                                            print(f"[TWILIO_RESPONSE] to: {call_to}")
+                                            
+                                            # Alerta si hay discrepancia
+                                            if str(call_from) != str(numero_agente):
+                                                st.error(f"⚠️ DISCREPANCIA DETECTADA:")
+                                                st.error(f"⚠️ Esperado: {numero_agente}")
+                                                st.error(f"⚠️ Real: {call_from}")
+                                                add_log(f"CALLER_ID_DISCREPANCY - Esperado: {numero_agente} - Real: {call_from}", "ERROR")
+                                        except Exception as attr_error:
+                                            print(f"[DEBUG] Error accediendo atributos de llamada: {attr_error}")
+                                            st.info("📊 Llamada creada exitosamente (sin verificación de Caller ID)")
                                         
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
                                         st.session_state.llamada_activa_sid = call_cliente.sid
@@ -3111,9 +3169,33 @@ with tab_op:
                                         st.session_state.t_inicio_dt = datetime.now()
                                         print(f"[DEBUG] Conference creada: {conference_name}")
                                         
+                                        # 🔥 VERIFICACIÓN POST-CREACIÓN
+                                        print(f"[DEBUG] Estado después de crear llamada:")
+                                        print(f"  - llamada_activa_sid: {st.session_state.llamada_activa_sid}")
+                                        print(f"  - conference_idx: {st.session_state.conference_idx}")
+                                        print(f"  - Total contactos: {len(st.session_state.df_contactos)}")
+                                        print(f"  - Índice válido: {0 <= st.session_state.conference_idx < len(st.session_state.df_contactos)}")
+                                        
+                                        # Validar que el contacto todavía exista
+                                        if st.session_state.conference_idx >= len(st.session_state.df_contactos):
+                                            st.error(f"❌ ERROR CRÍTICO: El contacto desapareció después de crear la llamada")
+                                            st.error(f"❌ Índice: {st.session_state.conference_idx} vs Total: {len(st.session_state.df_contactos)}")
+                                            add_log(f"CONFERENCE_CRITICAL_ERROR - Contacto desaparecido post-llamada", "ERROR")
+                                            # Intentar recuperar con el backup
+                                            if 'contacto_llamada_actual' in st.session_state:
+                                                backup = st.session_state.contacto_llamada_actual
+                                                st.warning(f"🔧 Backup disponible: {backup['nombre']} - {backup['telefono']}")
+                                            st.stop()
+                                        
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
                                         add_log(f"CALLER_ID_VALIDATION - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
-                                        add_log(f"TWILIO_CALL_DETAILS - from_: {call_cliente.from_} - to: {call_cliente.to}", "DEBUG")
+                                        # Registrar detalles de forma segura
+                                        try:
+                                            call_from = getattr(call_cliente, 'from', 'N/A')
+                                            call_to = getattr(call_cliente, 'to', 'N/A')
+                                            add_log(f"TWILIO_CALL_DETAILS - from: {call_from} - to: {call_to}", "DEBUG")
+                                        except Exception as attr_error:
+                                            add_log(f"TWILIO_CALL_DETAILS - SID: {call_cliente.sid} - Error atributos: {attr_error}", "DEBUG")
                                         
                                         st.success(f"✅ Llamada iniciada - El cliente verá tu número: {numero_agente}")
                                         st.info(f"📞 Agente recibe llamada de: {twilio_number}")
@@ -3121,12 +3203,23 @@ with tab_op:
                                         
                                         # 🔍 MOSTRAR INFORMACIÓN DE DEBUG
                                         with st.expander("🔍 Debug Info - Caller ID", expanded=False):
-                                            st.code(f"""
+                                            try:
+                                                call_from = getattr(call_cliente, 'from', 'N/A')
+                                                call_to = getattr(call_cliente, 'to', 'N/A')
+                                                debug_info = f"""
                                             Número Configurado: {numero_agente}
-                                            Número Twilio Response: {call_cliente.from_}
+                                            Número Twilio Response: {call_from}
                                             Cliente: {tel}
                                             SID: {call_cliente.sid}
-                                            """)
+                                            """
+                                            except Exception as attr_error:
+                                                debug_info = f"""
+                                            Número Configurado: {numero_agente}
+                                            Cliente: {tel}
+                                            SID: {call_cliente.sid}
+                                            Error atributos: {attr_error}
+                                            """
+                                            st.code(debug_info)
                                         
                                         # 🔍 ADVERTENCIA si se detecta el número problemático
                                         if "57322870205" in str(numero_agente):
@@ -3135,10 +3228,38 @@ with tab_op:
                                         time.sleep(1)
                                         st.rerun()
                                     except Exception as e:
-                                        st.error(f"Error al iniciar llamada: {e}")
+                                        st.error(f"❌ Error al iniciar llamada: {e}")
                                         print(f"[ERROR] Error en conference call: {e}")
                                         import traceback
                                         print(traceback.format_exc())
+                                        
+                                        # 🔥 RECUPERACIÓN DE ESTADO EN CASO DE ERROR
+                                        add_log(f"CONFERENCE_CALL_ERROR - {e}", "ERROR")
+                                        
+                                        # Limpiar estado parcial si algo falló
+                                        if 'llamada_activa_sid' in st.session_state and st.session_state.llamada_activa_sid:
+                                            try:
+                                                # Intentar colgar la llamada si se inició parcialmente
+                                                client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                                print(f"[DEBUG] Llamada parcial colgada por error")
+                                            except:
+                                                pass
+                                            finally:
+                                                st.session_state.llamada_activa_sid = None
+                                                st.session_state.conference_idx = None
+                                                st.session_state.conference_name = None
+                                                
+                                        st.warning("🔄 Estado limpiado. Intenta nuevamente.")
+                                        
+                                        # Mostrar información de depuración
+                                        with st.expander("🔍 Debug Info - Error", expanded=True):
+                                            st.code(f"""
+                                            Error: {e}
+                                            Contacto: {c.get('nombre', 'N/A')} - {tel}
+                                            Índice: {idx}
+                                            Total contactos: {len(st.session_state.df_contactos)}
+                                            Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                            """)
                                 # ============================================================
                                 # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
                                 # ============================================================
