@@ -2959,6 +2959,10 @@ with tab_op:
         # Limpiar el estado de redirección
         del st.session_state.redireccionar_a_programadas
     
+    # --- BÚSQUEDA AVANZADA ---
+    st.markdown("### 🔍 Búsqueda Avanzada")
+    search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
+    
     # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
     if "Gestionadas" in opc:
         # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
