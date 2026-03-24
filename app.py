@@ -397,8 +397,12 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
             # Obtener worksheet
             worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
             
-            # Actualizar solo las filas específicas sin borrar todo el sheet
-            rate_limiter.check_and_wait(operation_type="write")
+            # OPTIMIZACIÓN: Leer el sheet UNA SOLA VEZ antes del bucle
+            rate_limiter.check_and_wait(operation_type="read")
+            existing_data = worksheet.get_all_records()
+            
+            # Calcular la siguiente fila vacía disponible para nuevos registros
+            next_empty_row = len(existing_data) + 2
             
             # En lugar de borrar todo, actualizar solo las filas necesarias
             # Esto preserva otros contactos que puedan existir en el sheet
@@ -409,19 +413,17 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
                 if telefono:
                     # Intentar encontrar la fila existente
                     try:
-                        rate_limiter.check_and_wait(operation_type="read")
-                        existing_data = worksheet.get_all_records()
-                        
-                        # Buscar fila existente por teléfono
+                        # Buscar fila existente por teléfono en los datos ya leídos
                         target_row = None
                         for i, existing_row in enumerate(existing_data):
                             if str(existing_row.get('telefono', '')) == telefono:
                                 target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
                                 break
                         
-                        # Si no se encuentra, agregar al final
+                        # Si no se encuentra, usar la siguiente fila vacía e incrementarla
                         if target_row is None:
-                            target_row = len(existing_data) + 2
+                            target_row = next_empty_row
+                            next_empty_row += 1
                         
                         # Preparar datos de la fila
                         row_data = row.values.tolist()
@@ -665,6 +667,11 @@ def update_call_status_safe(df_contactos, idx, nuevo_estado, observacion, duraci
         print(f"[ERROR] Error en update_call_status_safe: {e}")
         return False
 
+def normalize_phone_for_search(phone):
+    """Normaliza número de teléfono para búsqueda (solo dígitos) para evitar errores de formato"""
+    if pd.isna(phone): return ""
+    return re.sub(r'\D', '', str(phone))
+
 def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
     """
     Actualiza solo un contacto específico en el sheet sin afectar otros registros.
@@ -686,7 +693,8 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         
         # Obtener datos del contacto específico
         contact_data = df_contactos.loc[idx]
-        telefono = str(contact_data.get('telefono', ''))
+                telefono = normalize_phone_for_search(contact_data.get('telefono', ''))
+
         
         if not telefono:
             print(f"[ERROR] {operation_type} - No hay teléfono para identificar el contacto")
@@ -699,24 +707,48 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         # Buscar la fila del contacto por teléfono
         rate_limiter.check_and_wait(operation_type="read")
         existing_data = worksheet.get_all_records()
+        if existing_data:
+            sheet_headers = list(existing_data[0].keys())
+        else:
+            sheet_headers = worksheet.row_values(1) # Fallback si no hay datos
+
+        # Obtener headers reales del sheet para respetar el orden de columnas del usuario
+
         
         target_row = None
         for i, existing_row in enumerate(existing_data):
-            if str(existing_row.get('telefono', '')) == telefono:
+            # Comparación robusta: normalizar ambos números
+            existing_phone = normalize_phone_for_search(existing_row.get('telefono', ''))
+            if existing_phone == telefono:
                 target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
                 break
         
         # Si no se encuentra, agregar al final
         if target_row is None:
             target_row = len(existing_data) + 2
-            print(f"[DEBUG] {operation_type} - Contacto {telefono} no encontrado, agregando en fila {target_row}")
+                        print(f"[DEBUG] {operation_type} - Contacto no encontrado, agregando en fila {target_row}")
         else:
-            print(f"[DEBUG] {operation_type} - Actualizando contacto {telefono} en fila {target_row}")
-        
-        # Preparar datos de la fila
-        row_data = contact_data.values.tolist()
-        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
-        
+            print(f"[DEBUG] {operation_type} - Actualizando contacto en fila {target_row}")
+
+        # Reconstruir datos respetando el orden de columnas del SHEET (no del DataFrame)
+        row_data = []
+        for col_header in sheet_headers:
+        # Buscar el valor en el DataFrame usando el nombre de columna (insensible a mayúsculas)
+            val = None
+            col_found = False
+
+            # Buscar coincidencia exacta o insensible a mayúsculas
+            for df_col in contact_data.index:
+                if df_col.lower() == col_header.lower():
+                    val = contact_data[df_col]
+                    col_found = True
+                    break
+
+            if col_found:
+                val = "" # Si la columna del Excel no está en el DataFrame, dejar vacío
+            val_str = str(val) if val is not None and str(val) != 'nan' else ''
+            row_data.append(val_str)
+
         # Actualizar solo esta fila específica
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
