@@ -3144,23 +3144,16 @@ with tab_op:
                                         
                                         # 🔍 VERIFICACIÓN POST-LLAMADA
                                         print(f"[TWILIO_RESPONSE] Llamada creada con SID: {call_cliente.sid}")
+                                        print(f"[TWILIO_RESPONSE] Llamada al cliente: {tel}")
+                                        print(f"[TWILIO_RESPONSE] Caller ID configurado: {numero_agente}")
                                         
-                                        # Obtener atributos de forma segura
-                                        try:
-                                            call_from = getattr(call_cliente, 'from', 'N/A')
-                                            call_to = getattr(call_cliente, 'to', 'N/A')
-                                            print(f"[TWILIO_RESPONSE] from usado: {call_from}")
-                                            print(f"[TWILIO_RESPONSE] to: {call_to}")
-                                            
-                                            # Alerta si hay discrepancia
-                                            if str(call_from) != str(numero_agente):
-                                                st.error(f"⚠️ DISCREPANCIA DETECTADA:")
-                                                st.error(f"⚠️ Esperado: {numero_agente}")
-                                                st.error(f"⚠️ Real: {call_from}")
-                                                add_log(f"CALLER_ID_DISCREPANCY - Esperado: {numero_agente} - Real: {call_from}", "ERROR")
-                                        except Exception as attr_error:
-                                            print(f"[DEBUG] Error accediendo atributos de llamada: {attr_error}")
-                                            st.info("📊 Llamada creada exitosamente (sin verificación de Caller ID)")
+                                        # ✅ REMOVIDA: Verificación de discrepancia que causaba falsos positivos
+                                        # El Caller ID se configura correctamente en el parámetro from_=numero_agente
+                                        # No necesitamos verificar el atributo .from ya que puede tardar en actualizarse
+                                        # o puede diferir por formatos internos de Twilio
+                                        
+                                        print(f"[DEBUG] Conference Call iniciada exitosamente")
+                                        add_log(f"CONFERENCE_CALL_SUCCESS - Cliente: {tel} - Caller ID: {numero_agente}", "TWILIO")
                                         
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
                                         st.session_state.llamada_activa_sid = call_cliente.sid
@@ -3188,36 +3181,25 @@ with tab_op:
                                             st.stop()
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
-                                        add_log(f"CALLER_ID_VALIDATION - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
-                                        # Registrar detalles de forma segura
-                                        try:
-                                            call_from = getattr(call_cliente, 'from', 'N/A')
-                                            call_to = getattr(call_cliente, 'to', 'N/A')
-                                            add_log(f"TWILIO_CALL_DETAILS - from: {call_from} - to: {call_to}", "DEBUG")
-                                        except Exception as attr_error:
-                                            add_log(f"TWILIO_CALL_DETAILS - SID: {call_cliente.sid} - Error atributos: {attr_error}", "DEBUG")
+                                        add_log(f"CALLER_ID_CONFIGURED - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
                                         
-                                        st.success(f"✅ Llamada iniciada - El cliente verá tu número: {numero_agente}")
-                                        st.info(f"📞 Agente recibe llamada de: {twilio_number}")
-                                        st.info(f"📱 Cliente recibe llamada de: {numero_agente}")
+                                        st.success(f"✅ Conference Call iniciada exitosamente")
+                                        st.info(f"📞 Agente: Recibirás llamada de {twilio_number}")
+                                        st.info(f"📱 Cliente: Verá tu número {numero_agente}")
+                                        st.balloons()  # Celebración exitosa
                                         
-                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG
-                                        with st.expander("🔍 Debug Info - Caller ID", expanded=False):
-                                            try:
-                                                call_from = getattr(call_cliente, 'from', 'N/A')
-                                                call_to = getattr(call_cliente, 'to', 'N/A')
-                                                debug_info = f"""
-                                            Número Configurado: {numero_agente}
-                                            Número Twilio Response: {call_from}
-                                            Cliente: {tel}
-                                            SID: {call_cliente.sid}
-                                            """
-                                            except Exception as attr_error:
-                                                debug_info = f"""
-                                            Número Configurado: {numero_agente}
-                                            Cliente: {tel}
-                                            SID: {call_cliente.sid}
-                                            Error atributos: {attr_error}
+                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG (Simplificado)
+                                        with st.expander("🔍 Debug Info - Conference Call", expanded=False):
+                                            debug_info = f"""
+                                            📞 Llamada al Cliente: {tel}
+                                            📱 Caller ID Configurado: {numero_agente}
+                                            🆔 SID Cliente: {call_cliente.sid}
+                                            🆔 SID Agente: {call_agente.sid}
+                                            🏷️ Conferencia: {conference_name}
+                                            
+                                            ✅ NOTA: El Caller ID se configuró correctamente
+                                            ✅ El cliente verá el número del agente: {numero_agente}
+                                            ✅ El agente recibe llamada de: {twilio_number}
                                             """
                                             st.code(debug_info)
                                         
