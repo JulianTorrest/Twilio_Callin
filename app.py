@@ -119,20 +119,20 @@ try:
     URL_SHEET_CONTACTOS = st.secrets.get("GSHEET_CONTACTOS_URL")
     GDRIVE_LOGS_FOLDER_ID = st.secrets.get("GDRIVE_LOGS_FOLDER_ID")
     CEDULAS_AUTORIZADAS = st.secrets.get("CEDULAS_AUTORIZADAS", ["1121871773", "87654321", "12345678","52486921"])
-    
+
     # Sheets específicos por agente
     AGENT_SHEETS = dict(st.secrets.get("agent_sheets", {}))
-    
+
     # Mapeo de números celulares de agentes para Hybrid Click-to-Call
     NUMEROS_CELULAR_AGENTES = dict(st.secrets.get("numeros_celular_agentes", {}))
-    
+
     client = Client(account_sid, auth_token)
-    
+
     # Conexión a Google Sheets usando gspread con Service Account
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
     gc = gspread.authorize(creds)
-    
+
     # Extraer IDs de los sheets (NO abrirlos todavía para evitar rate limit)
     sheet_id_informe = URL_SHEET_INFORME.split('/d/')[1].split('/')[0]
     sheet_id_contactos = URL_SHEET_CONTACTOS.split('/d/')[1].split('/')[0]
@@ -173,24 +173,24 @@ def sanitizar_nota(nota):
     """
     if not nota or pd.isna(nota):
         return ""
-    
+
     # Convertir a string si no lo es
     nota = str(nota)
-    
+
     # Eliminar caracteres peligrosos para inyección
     nota = re.sub(r'[<>"\']', '', nota)
-    
+
     # Eliminar scripts y patrones peligrosos
     nota = re.sub(r'(?i)script', '', nota)
     nota = re.sub(r'(?i)javascript:', '', nota)
     nota = re.sub(r'(?i)on\w+\s*=', '', nota)
-    
+
     # Limitar longitud máxima (1000 caracteres)
     nota = nota[:1000] if len(nota) > 1000 else nota
-    
+
     # Eliminar espacios excesivos
     nota = re.sub(r'\s+', ' ', nota).strip()
-    
+
     return nota
 
 def sanitizar_telefono(telefono):
@@ -204,10 +204,10 @@ def sanitizar_telefono(telefono):
     """
     if not telefono or pd.isna(telefono):
         return ""
-    
+
     # Mantener solo dígitos y signos +
     telefono = re.sub(r'[^\d+]', '', str(telefono))
-    
+
     # Validar formato básico
     if telefono.startswith('+'):
         # Formato internacional: + seguido de 9-15 dígitos
@@ -217,7 +217,7 @@ def sanitizar_telefono(telefono):
         # Formato nacional: 7-15 dígitos
         if re.match(r'^\d{7,15}$', telefono):
             return telefono
-    
+
     return ""
 
 def sanitizar_nombre(nombre):
@@ -231,35 +231,35 @@ def sanitizar_nombre(nombre):
     """
     if not nombre or pd.isna(nombre):
         return ""
-    
+
     nombre = str(nombre)
-    
+
     # Eliminar caracteres peligrosos pero permitir letras, números, espacios y caracteres comunes
     nombre = re.sub(r'[<>"\']', '', nombre)
-    
+
     # Limitar longitud (100 caracteres)
     nombre = nombre[:100] if len(nombre) > 100 else nombre
-    
+
     # Eliminar espacios excesivos
     nombre = re.sub(r'\s+', ' ', nombre).strip()
-    
+
     return nombre
 
 # --- SISTEMA DE CONTROL DE CONCURRENCIA PARA SHEETS ---
 class SheetConcurrencyManager:
     """Maneja concurrencia para evitar conflictos de escritura en Google Sheets"""
-    
+
     def __init__(self):
         self.locks = {}  # Locks por sheet
         self.last_operations = {}  # Últimas operaciones por agente
         self.operation_hashes = {}  # Hashes de operaciones para detectar duplicados
-    
+
     def get_lock_key(self, sheet_url, worksheet_name):
         """Genera una clave única para el lock"""
         import hashlib
         key = f"{sheet_url}_{worksheet_name}"
         return hashlib.md5(key.encode()).hexdigest()
-    
+
     def acquire_lock(self, sheet_url, worksheet_name, agente_id, timeout=10):
         """Adquiere un lock para escribir en un sheet específico
         
@@ -273,12 +273,12 @@ class SheetConcurrencyManager:
             bool: True si obtuvo el lock, False si no pudo obtenerlo
         """
         lock_key = self.get_lock_key(sheet_url, worksheet_name)
-        
+
         if lock_key not in self.locks:
             self.locks[lock_key] = threading.Lock()
-        
+
         lock = self.locks[lock_key]
-        
+
         try:
             # Intentar adquirir el lock con timeout
             acquired = lock.acquire(timeout=timeout)
@@ -292,7 +292,7 @@ class SheetConcurrencyManager:
         except Exception as e:
             print(f"[CONCURRENCY] Error adquiriendo lock: {e}")
             return False
-    
+
     def release_lock(self, sheet_url, worksheet_name):
         """Libera un lock de escritura
         
@@ -301,17 +301,17 @@ class SheetConcurrencyManager:
             worksheet_name: Nombre del worksheet
         """
         lock_key = self.get_lock_key(sheet_url, worksheet_name)
-        
+
         if lock_key in self.locks:
             lock = self.locks[lock_key]
             if lock.locked():
                 lock.release()
                 print(f"[CONCURRENCY] Lock liberado para {worksheet_name}")
-            
+
             # Limpiar información antigua
             if lock_key in self.last_operations:
                 del self.last_operations[lock_key]
-    
+
     def is_operation_duplicate(self, sheet_url, worksheet_name, data_hash):
         """Verifica si una operación es duplicada
         
@@ -324,12 +324,12 @@ class SheetConcurrencyManager:
             bool: True si es duplicado, False si es nueva
         """
         key = f"{sheet_url}_{worksheet_name}"
-        
+
         if key in self.operation_hashes:
             last_hash, last_time = self.operation_hashes[key]
             if last_hash == data_hash and (time.time() - last_time) < 5:  # 5 segundos de gracia
                 return True
-        
+
         # Registrar esta operación
         self.operation_hashes[key] = (data_hash, time.time())
         return False
@@ -354,56 +354,52 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
     try:
         # Sanitizar datos antes de escribir
         df_sanitizado = df.copy()
-        
+
         # Sanitizar columnas de texto
         if 'nombre' in df_sanitizado.columns:
             df_sanitizado['nombre'] = df_sanitizado['nombre'].apply(sanitizar_nombre)
-        
+
         if 'observacion' in df_sanitizado.columns:
             df_sanitizado['observacion'] = df_sanitizado['observacion'].apply(sanitizar_nota)
-        
+
         if 'telefono' in df_sanitizado.columns:
             df_sanitizado['telefono'] = df_sanitizado['telefono'].apply(sanitizar_telefono)
-        
+
         # Generar hash de los datos para detectar duplicados
         data_hash = hashlib.md5(str(df_sanitizado.values.tolist()).encode()).hexdigest()
-        
+
         # Determinar sheet URL
         target_url = sheet_url or URL_SHEET_INFORME
-        
+
         # Verificar si es operación duplicada
         concurrency_manager = st.session_state.concurrency_manager
         if concurrency_manager.is_operation_duplicate(target_url, worksheet_name, data_hash):
             print(f"[CONCURRENCY] Operación duplicada detectada, omitiendo escritura")
             return True
-        
+
         # Adquirir lock de concurrencia
         agente_id = agente_id or st.session_state.get('agente_id', 'unknown')
         if not concurrency_manager.acquire_lock(target_url, worksheet_name, agente_id):
             print(f"[CONCURRENCY] No se pudo adquirir lock para {worksheet_name}")
             return False
-        
+
         try:
             # Realizar la actualización con rate limiting
             rate_limiter.check_and_wait(operation_type="write")
-            
+
             # Determinar qué spreadsheet usar
             if sheet_url:
                 rate_limiter.check_and_wait(operation_type="read")
                 target_spreadsheet = gc.open_by_url(sheet_url)
             else:
                 target_spreadsheet = get_spreadsheet_informe()
-            
+
             # Obtener worksheet
             worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
-            
-            # OPTIMIZACIÓN: Leer el sheet UNA SOLA VEZ antes del bucle
-            rate_limiter.check_and_wait(operation_type="read")
-            existing_data = worksheet.get_all_records()
-            
-            # Calcular la siguiente fila vacía disponible para nuevos registros
-            next_empty_row = len(existing_data) + 2
-            
+
+            # Actualizar solo las filas específicas sin borrar todo el sheet
+            rate_limiter.check_and_wait(operation_type="write")
+
             # En lugar de borrar todo, actualizar solo las filas necesarias
             # Esto preserva otros contactos que puedan existir en el sheet
             for idx, row in df_sanitizado.iterrows():
@@ -413,28 +409,30 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
                 if telefono:
                     # Intentar encontrar la fila existente
                     try:
-                        # Buscar fila existente por teléfono en los datos ya leídos
+                        rate_limiter.check_and_wait(operation_type="read")
+                        existing_data = worksheet.get_all_records()
+
+                        # Buscar fila existente por teléfono
                         target_row = None
                         for i, existing_row in enumerate(existing_data):
                             if str(existing_row.get('telefono', '')) == telefono:
                                 target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
                                 break
-                        
-                        # Si no se encuentra, usar la siguiente fila vacía e incrementarla
+
+                        # Si no se encuentra, agregar al final
                         if target_row is None:
-                            target_row = next_empty_row
-                            next_empty_row += 1
-                        
+                            target_row = len(existing_data) + 2
+
                         # Preparar datos de la fila
                         row_data = row.values.tolist()
                         row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
-                        
+
                         # Actualizar solo esta fila específica
                         rate_limiter.check_and_wait(operation_type="write")
                         worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
-                        
+
                         print(f"[DEBUG] Fila {target_row} actualizada para teléfono {telefono}")
-                        
+
                     except Exception as e:
                         print(f"[ERROR] Error actualizando fila específica para {telefono}: {e}")
                         # Fallback: agregar al final si hay error
@@ -443,14 +441,14 @@ def update_sheet_safe(df, worksheet_name="0", sheet_url=None, agente_id=None):
                             worksheet.append_row(row.values.tolist())
                         except Exception as e2:
                             print(f"[ERROR] Error en fallback append: {e2}")
-            
+
             print(f"[SECURITY] Sheet actualizado exitosamente por {agente_id} (actualización targeted)")
             return True
-            
+
         finally:
             # Siempre liberar el lock
             concurrency_manager.release_lock(target_url, worksheet_name)
-            
+
     except Exception as e:
         print(f"[SECURITY] Error actualizando sheet seguro: {e}")
         import traceback
@@ -473,7 +471,7 @@ class RateLimiter:
         self.warning_threshold = warning_threshold
         self.request_times = []
         self.warning_shown = False
-    
+
     def check_and_wait(self, operation_type="read"):
         """Verifica el rate limit y espera si es necesario
         
@@ -481,14 +479,14 @@ class RateLimiter:
             operation_type: 'read' o 'write'
         """
         now = time.time()
-        
+
         # Limpiar requests antiguos (más de 60 segundos)
         self.request_times = [t for t in self.request_times if now - t < 60]
-        
+
         # Calcular uso actual
         current_usage = len(self.request_times)
         usage_percentage = current_usage / self.max_requests
-        
+
         # Si estamos al 90% o más del límite
         if usage_percentage >= self.warning_threshold:
             wait_time = 3  # Esperar 3 segundos
@@ -502,14 +500,14 @@ class RateLimiter:
             self.warning_shown = False
         else:
             self.warning_shown = False
-        
+
         # Registrar esta operación
         self.request_times.append(now)
-        
+
         # Log de debug
         if current_usage % 10 == 0 and current_usage > 0:
             print(f"[RATE LIMIT] Operaciones en último minuto: {current_usage}/{self.max_requests}")
-    
+
     def reset(self):
         """Resetear el contador"""
         self.request_times = []
@@ -564,7 +562,7 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
     try:
         # Verificar rate limit antes de escribir
         rate_limiter.check_and_wait(operation_type="write")
-        
+
         # Determinar qué spreadsheet usar
         if sheet_url:
             # Abrir el spreadsheet específico desde la URL
@@ -573,10 +571,10 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
         else:
             # Usar el spreadsheet por defecto (Informe)
             target_spreadsheet = get_spreadsheet_informe()
-        
+
         # Obtener el worksheet
         worksheet = target_spreadsheet.get_worksheet(int(worksheet_name)) if worksheet_name.isdigit() else target_spreadsheet.worksheet(worksheet_name)
-        
+
         # Limpiar y actualizar (estas son 2 operaciones)
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.clear()
@@ -605,28 +603,28 @@ def update_single_call_row(df_contactos, idx, sheet_url):
     try:
         # Verificar rate limit
         rate_limiter.check_and_wait(operation_type="write")
-        
+
         # Abrir el spreadsheet
         spreadsheet = gc.open_by_url(sheet_url)
         worksheet = spreadsheet.get_worksheet(0)
-        
+
         # Obtener la fila específica del DataFrame (idx + 2 porque Google Sheets es 1-indexed y tiene header)
         row_number = idx + 2
         row_data = df_contactos.iloc[idx].values.tolist()
-        
+
         # Convertir valores None/NaN a strings vacíos para Google Sheets
         row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
-        
+
         print(f"[DEBUG] Actualizando fila {row_number} en Sheet Llamadas")
         print(f"[DEBUG] Datos: {row_data[:5]}...")  # Solo mostrar primeros 5 campos
-        
+
         # Actualizar solo la fila específica
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.update(f'A{row_number}:{chr(65 + len(row_data) - 1)}{row_number}', [row_data])
-        
+
         print(f"[DEBUG] ✅ Fila {row_number} actualizada exitosamente")
         return True
-        
+
     except Exception as e:
         print(f"[ERROR] Error actualizando fila específica: {e}")
         import traceback
@@ -659,18 +657,13 @@ def update_call_status_safe(df_contactos, idx, nuevo_estado, observacion, duraci
         df_contactos.at[idx, 'agente_id'] = agente_id
         df_contactos.at[idx, 'fecha_llamada'] = fecha_llamada
         df_contactos.at[idx, 'sid_llamada'] = sid_llamada
-        
+
         # Actualizar solo esta fila en Google Sheets
         return update_single_call_row(df_contactos, idx, sheet_url)
-        
+
     except Exception as e:
         print(f"[ERROR] Error en update_call_status_safe: {e}")
         return False
-
-def normalize_phone_for_search(phone):
-    """Normaliza número de teléfono para búsqueda (solo dígitos) para evitar errores de formato"""
-    if pd.isna(phone): return ""
-    return re.sub(r'\D', '', str(phone))
 
 def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
     """
@@ -690,72 +683,47 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
     try:
         # Verificar rate limit
         rate_limiter.check_and_wait(operation_type="write")
-        
-        # Obtener datos del contacto específico
-        contact_data = df_contactos.loc[idx]
-                telefono = normalize_phone_for_search(contact_data.get('telefono', ''))
 
-        
+        # Obtener datos del contacto específico
+        contact_data = df_contactos.iloc[idx]
+        telefono = str(contact_data.get('telefono', ''))
+
         if not telefono:
             print(f"[ERROR] {operation_type} - No hay teléfono para identificar el contacto")
             return False
-        
+
         # Abrir el spreadsheet
         spreadsheet = gc.open_by_url(sheet_url)
         worksheet = spreadsheet.get_worksheet(0)
-        
+
         # Buscar la fila del contacto por teléfono
         rate_limiter.check_and_wait(operation_type="read")
         existing_data = worksheet.get_all_records()
-        if existing_data:
-            sheet_headers = list(existing_data[0].keys())
-        else:
-            sheet_headers = worksheet.row_values(1) # Fallback si no hay datos
 
-        # Obtener headers reales del sheet para respetar el orden de columnas del usuario
-
-        
         target_row = None
         for i, existing_row in enumerate(existing_data):
-            # Comparación robusta: normalizar ambos números
-            existing_phone = normalize_phone_for_search(existing_row.get('telefono', ''))
-            if existing_phone == telefono:
+            if str(existing_row.get('telefono', '')) == telefono:
                 target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
                 break
-        
+
         # Si no se encuentra, agregar al final
         if target_row is None:
             target_row = len(existing_data) + 2
-                        print(f"[DEBUG] {operation_type} - Contacto no encontrado, agregando en fila {target_row}")
+            print(f"[DEBUG] {operation_type} - Contacto {telefono} no encontrado, agregando en fila {target_row}")
         else:
-            print(f"[DEBUG] {operation_type} - Actualizando contacto en fila {target_row}")
+            print(f"[DEBUG] {operation_type} - Actualizando contacto {telefono} en fila {target_row}")
 
-        # Reconstruir datos respetando el orden de columnas del SHEET (no del DataFrame)
-        row_data = []
-        for col_header in sheet_headers:
-        # Buscar el valor en el DataFrame usando el nombre de columna (insensible a mayúsculas)
-            val = None
-            col_found = False
-
-            # Buscar coincidencia exacta o insensible a mayúsculas
-            for df_col in contact_data.index:
-                if df_col.lower() == col_header.lower():
-                    val = contact_data[df_col]
-                    col_found = True
-                    break
-
-            if col_found:
-                val = "" # Si la columna del Excel no está en el DataFrame, dejar vacío
-            val_str = str(val) if val is not None and str(val) != 'nan' else ''
-            row_data.append(val_str)
+        # Preparar datos de la fila
+        row_data = contact_data.values.tolist()
+        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
 
         # Actualizar solo esta fila específica
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
-        
+
         print(f"[DEBUG] {operation_type} - Fila {target_row} actualizada exitosamente para {telefono}")
         return True
-        
+
     except Exception as e:
         print(f"[ERROR] {operation_type} - Error actualizando contacto específico: {e}")
         import traceback
@@ -779,7 +747,7 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
     try:
         success_shared = False
         success_agent = False
-        
+
         # Determinar qué contactos actualizar
         if contact_idx is not None:
             # Actualizar solo un contacto específico
@@ -787,7 +755,7 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
         else:
             # Actualizar todos los contactos del DataFrame local
             contacts_to_update = df_contactos.index.tolist()
-        
+
         # 1. Actualizar sheet compartido (output)
         try:
             all_shared_success = True
@@ -795,13 +763,13 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
                 if not update_contact_in_sheet_safe(df_contactos, idx, URL_SHEET_CONTACTOS, agente_id, f"{operation_type}_SHARED"):
                     all_shared_success = False
                     print(f"[ERROR] {operation_type} - Error actualizando contacto {idx} en sheet compartido")
-            
+
             success_shared = all_shared_success
             if success_shared:
                 print(f"[DEBUG] {operation_type} - Sheet compartido actualizado exitosamente")
         except Exception as e:
             print(f"[ERROR] {operation_type} - Error en sheet compartido: {e}")
-        
+
         # 2. Actualizar sheet específico del agente (si existe)
         try:
             agent_sheet_url = get_agent_sheet_url(agente_id)
@@ -811,7 +779,7 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
                     if not update_contact_in_sheet_safe(df_contactos, idx, agent_sheet_url, agente_id, f"{operation_type}_AGENT"):
                         all_agent_success = False
                         print(f"[ERROR] {operation_type} - Error actualizando contacto {idx} en sheet del agente")
-                
+
                 success_agent = all_agent_success
                 if success_agent:
                     print(f"[DEBUG] {operation_type} - Sheet del agente {agente_id} actualizado exitosamente")
@@ -820,9 +788,9 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
                 print(f"[DEBUG] {operation_type} - Agente {agente_id} usa solo sheet compartido")
         except Exception as e:
             print(f"[ERROR] {operation_type} - Error en sheet del agente: {e}")
-        
+
         return success_shared and success_agent
-        
+
     except Exception as e:
         print(f"[ERROR] Error en update_both_sheets_safe: {e}")
         return False
@@ -867,46 +835,46 @@ def cargar_contactos_agente(cedula_agente):
     try:
         # Obtener la URL del sheet específico del agente
         agent_sheet_url = get_agent_sheet_url(cedula_agente)
-        
+
         # Leer todos los contactos del Sheet específico del agente con rate limiting
         rate_limiter.check_and_wait(operation_type="read")
         spreadsheet_contactos = gc.open_by_url(agent_sheet_url)
         worksheet = spreadsheet_contactos.get_worksheet(0)
         data = worksheet.get_all_values()
-        
+
         # Definir columnas requeridas en el orden correcto
         columnas_requeridas = ['nombre', 'codigo_pais', 'telefono', 'cedula_agente', 'estado', 'observacion', 
                               'fecha_llamada', 'duracion_seg', 'sid_llamada', 'proxima_llamada', 'agente_id']
-        
+
         if len(data) <= 1:
             print(f"[DEBUG] Sheet de contactos vacío o solo tiene encabezados")
             # Retornar DataFrame vacío pero con las columnas necesarias
             return pd.DataFrame(columns=columnas_requeridas)
-        
+
         # Crear DataFrame con los datos del sheet
         df_todos = pd.DataFrame(data[1:], columns=data[0])
         print(f"[DEBUG] Total contactos en sheet: {len(df_todos)}")
         print(f"[DEBUG] Columnas actuales en Sheet: {list(df_todos.columns)}")
-        
+
         # Verificar que existe la columna cedula_agente
         if 'cedula_agente' not in df_todos.columns:
             print(f"[ERROR] El sheet no tiene la columna 'cedula_agente'")
             return pd.DataFrame(columns=columnas_requeridas)
-        
+
         # Agregar columnas faltantes a TODO el DataFrame (antes de filtrar)
         columnas_faltantes = []
         for col in columnas_requeridas:
             if col not in df_todos.columns:
                 df_todos[col] = ''
                 columnas_faltantes.append(col)
-        
+
         if columnas_faltantes:
             print(f"[DEBUG] ⚠️ Columnas agregadas al DataFrame: {columnas_faltantes}")
             print(f"[DEBUG] 💡 Estas columnas se agregarán al Sheet cuando se guarde la primera gestión")
-        
+
         # Reordenar columnas para que coincidan con el orden requerido
         df_todos = df_todos[columnas_requeridas]
-        
+
         # RELLENO AUTOMÁTICO INTELIGENTE DE ESTADO
         # Solo rellenar 'Pendiente' si la fila tiene datos válidos (nombre, telefono, cedula_agente)
         # Esto evita rellenar filas vacías infinitas y problemas de quota
@@ -915,31 +883,31 @@ def cargar_contactos_agente(cedula_agente):
             (df_todos['telefono'].astype(str).str.strip() != '') & 
             (df_todos['cedula_agente'].astype(str).str.strip() != '')
         )
-        
+
         # Contar cuántas filas tienen estado vacío pero datos válidos
         estado_vacio = df_todos['estado'].fillna('').astype(str).str.strip() == ''
         filas_a_rellenar = filas_con_datos & estado_vacio
         num_filas_rellenadas = filas_a_rellenar.sum()
-        
+
         if num_filas_rellenadas > 0:
             # Rellenar solo las filas que tienen datos válidos
             df_todos.loc[filas_a_rellenar, 'estado'] = 'Pendiente'
             print(f"[DEBUG] 🔄 Auto-rellenado: {num_filas_rellenadas} filas con estado vacío → 'Pendiente'")
             print(f"[DEBUG] ⚠️ IMPORTANTE: Estas filas se guardarán en el Sheet en la próxima actualización")
-        
+
         # Filtrar por cedula_agente
         df_agente = df_todos[df_todos['cedula_agente'].astype(str) == str(cedula_agente)].copy()
         print(f"[DEBUG] Contactos para agente {cedula_agente}: {len(df_agente)}")
-        
+
         if df_agente.empty:
             print(f"[DEBUG] No hay contactos asignados al agente {cedula_agente}")
             return pd.DataFrame(columns=columnas_requeridas)
-        
+
         # Asignar agente_id si está vacío (solo para contactos del agente)
         df_agente['agente_id'] = df_agente['agente_id'].fillna('').replace('', cedula_agente)
-        
+
         print(f"[DEBUG] ✅ DataFrame cargado con {len(df_agente)} contactos y {len(df_agente.columns)} columnas")
-        
+
         return df_agente
     except Exception as e:
         print(f"[ERROR] Error cargando contactos: {e}")
@@ -961,11 +929,11 @@ def solicitar_transcripcion(recording_sid):
     """
     try:
         print(f"[DEBUG] 🎤 Solicitando transcripción para recording: {recording_sid}")
-        
+
         # Primero verificar si la grabación existe
         recording = client.recordings(recording_sid).fetch()
         print(f"[DEBUG] 📼 Grabación encontrada - Status: {recording.status}, Duration: {recording.duration}s")
-        
+
         # Intentar crear transcripción
         transcription = client.transcriptions.create(recording_sid=recording_sid)
         print(f"[DEBUG] ✅ Transcripción solicitada exitosamente: {transcription.sid}")
@@ -975,7 +943,7 @@ def solicitar_transcripcion(recording_sid):
         print(f"[ERROR] ❌ Error solicitando transcripción: {e}")
         import traceback
         print(f"[ERROR] Traceback completo: {traceback.format_exc()}")
-        
+
         # Verificar si es un error de configuración
         if "transcription" in str(e).lower():
             print(f"[ERROR] ⚠️ Posible error de configuración de transcripción en Twilio")
@@ -997,7 +965,7 @@ def guardar_en_sheet_informe(contacto, telefono, estado, nota, duracion_seg, sid
     """
     try:
         t_fin = datetime.now()
-        
+
         # Preparar fila para Sheet Informe
         fila_informe = pd.DataFrame({
             'agente_id': [st.session_state.agente_id],
@@ -1014,7 +982,7 @@ def guardar_en_sheet_informe(contacto, telefono, estado, nota, duracion_seg, sid
             'estado_respuesta': ['paused' if estado == 'Grabación Pausada' else 'unknown'],
             'codigo_error': ['']
         })
-        
+
         # Leer Sheet Informe actual (con caché)
         if 'df_informe_cache' not in st.session_state or st.session_state.get('informe_cache_time', 0) < time.time() - 30:
             df_informe_actual = read_sheet("0")
@@ -1022,13 +990,13 @@ def guardar_en_sheet_informe(contacto, telefono, estado, nota, duracion_seg, sid
             st.session_state.informe_cache_time = time.time()
         else:
             df_informe_actual = st.session_state.df_informe_cache
-        
+
         # Agregar nuevo registro
         if df_informe_actual.empty:
             df_informe_actualizado = fila_informe.copy()
         else:
             df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
-        
+
         # Guardar en Sheet Informe
         if update_sheet(df_informe_actualizado, "0"):
             # Actualizar caché
@@ -1046,37 +1014,37 @@ def guardar_logs_en_drive():
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaInMemoryUpload
         from io import BytesIO
-        
+
         # Crear contenido del log
         log_content = "\n".join(st.session_state.logs)
-        
+
         # Crear nombre de archivo con timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"log_agente_{st.session_state.agente_id}_{timestamp}.txt"
-        
+
         # Construir servicio de Drive
         drive_service = build('drive', 'v3', credentials=creds)
-        
+
         # Crear metadata del archivo
         file_metadata = {
             'name': filename,
             'parents': [GDRIVE_LOGS_FOLDER_ID]
         }
-        
+
         # Crear media upload
         media = MediaInMemoryUpload(
             log_content.encode('utf-8'),
             mimetype='text/plain',
             resumable=True
         )
-        
+
         # Subir archivo
         file = drive_service.files().create(
             body=file_metadata,
             media_body=media,
             fields='id, name, webViewLink'
         ).execute()
-        
+
         print(f"[DEBUG] Logs guardados en Drive: {file.get('name')} (ID: {file.get('id')})")
         print(f"[DEBUG] Link: {file.get('webViewLink')}")
         return True
@@ -1107,40 +1075,40 @@ def verificar_recordatorios_proximos(df_contactos):
     """
     if df_contactos is None:
         return []
-    
+
     ahora = obtener_hora_bogota()
     limite_tiempo = ahora + timedelta(minutes=5)
-    
+
     # Filtrar contactos programados en los próximos 5 minutos
     programados_proximos = df_contactos[
         (df_contactos['estado'] == 'Programada') &
         (pd.notna(df_contactos['proxima_llamada'])) &
         (df_contactos['proxima_llamada'] != '')
     ].copy()
-    
+
     if programados_proximos.empty:
         return []
-    
+
     recordatorios = []
-    
+
     for idx, contacto in programados_proximos.iterrows():
         try:
             fecha_prog = pd.to_datetime(contacto['proxima_llamada'])
-            
+
             # Convertir a zona horaria de Bogotá si es necesario
             if fecha_prog.tzinfo is None:
                 fecha_prog = TZ_BOGOTA.localize(fecha_prog)
             else:
                 fecha_prog = fecha_prog.astimezone(TZ_BOGOTA)
-            
+
             # Verificar si está en los próximos 5 minutos
             if ahora <= fecha_prog <= limite_tiempo:
                 tiempo_restante = (fecha_prog - ahora).total_seconds()
-                
+
                 if tiempo_restante <= 300:  # 5 minutos = 300 segundos
                     minutos_restantes = int(tiempo_restante / 60)
                     segundos_restantes = int(tiempo_restante % 60)
-                    
+
                     recordatorios.append({
                         'nombre': contacto['nombre'],
                         'telefono': contacto['telefono'],
@@ -1150,13 +1118,13 @@ def verificar_recordatorios_proximos(df_contactos):
                         'tiempo_segundos': tiempo_restante,
                         'idx': idx
                     })
-                    
+
         except Exception as e:
             print(f"[ERROR] Error procesando recordatorio para {contacto.get('nombre', 'Unknown')}: {e}")
-    
+
     # Ordenar por tiempo restante (más urgente primero)
     recordatorios.sort(key=lambda x: x['tiempo_segundos'])
-    
+
     return recordatorios
 
 def mostrar_recordatorios(recordatorios):
@@ -1167,17 +1135,17 @@ def mostrar_recordatorios(recordatorios):
     """
     if not recordatorios:
         return
-    
+
     st.markdown("### 🔔 RECORDATORIOS INTELIGENTES")
-    
+
     for recordatorio in recordatorios:
         urgencia_class = "reminder-urgent" if recordatorio['tiempo_segundos'] <= 60 else "reminder-alert"
-        
+
         # Construir teléfono completo
         telefono = str(recordatorio['telefono'])
         if not telefono.startswith('+'):
             telefono = f"+57{telefono}"
-        
+
         st.markdown(f"""
         <div class="{urgencia_class}">
             <div style="display: flex; align-items: center; margin-bottom: 8px;">
@@ -1195,7 +1163,7 @@ def mostrar_recordatorios(recordatorios):
             </div>
         </div>
         """, unsafe_allow_html=True)
-        
+
         # Agregar sonido de notificación automático (solo para muy urgentes)
         if recordatorio['tiempo_segundos'] <= 60:
             st.markdown("""
@@ -1217,21 +1185,21 @@ def calcular_metricas_productividad(df_contactos, df_informe=None):
     """
     if df_contactos is None:
         return {}
-    
+
     ahora = obtener_hora_bogota()
     hoy = ahora.date()
-    
+
     # Métricas básicas
     total_contactos = len(df_contactos)
     contactados = len(df_contactos[df_contactos['estado'] == 'Llamado'])
     no_contactados = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
     programados = len(df_contactos[df_contactos['estado'] == 'Programada'])
     pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
-    
+
     # Tasa de contacto
     gestionados = contactados + no_contactados
     tasa_contacto = (contactados / gestionados * 100) if gestionados > 0 else 0
-    
+
     # Duración promedio (si hay informe)
     duracion_promedio = 0
     if df_informe is not None and not df_informe.empty:
@@ -1240,26 +1208,26 @@ def calcular_metricas_productividad(df_contactos, df_informe=None):
         duraciones = duraciones_numericas[duraciones_numericas.notna()]
         if not duraciones.empty:
             duracion_promedio = duraciones.mean()
-    
+
     # Métricas del día de hoy
     llamadas_hoy = 0
     if df_informe is not None and not df_informe.empty:
         df_informe['fecha_llamada'] = pd.to_datetime(df_informe['fecha_llamada'], errors='coerce')
         llamadas_hoy = len(df_informe[df_informe['fecha_llamada'].dt.date == hoy])
-    
+
     # Comparación con día anterior
     llamadas_ayer = 0
     if df_informe is not None and not df_informe.empty:
         ayer = hoy - timedelta(days=1)
         llamadas_ayer = len(df_informe[df_informe['fecha_llamada'].dt.date == ayer])
-    
+
     delta_dias = llamadas_hoy - llamadas_ayer
     delta_porcentaje = (delta_dias / llamadas_ayer * 100) if llamadas_ayer > 0 else 0
-    
+
     # Meta diaria (configurable)
     meta_diaria = 50  # Puede ser configurable en el futuro
     progreso_diario = (llamadas_hoy / meta_diaria * 100) if meta_diaria > 0 else 0
-    
+
     return {
         'total_contactos': total_contactos,
         'contactados': contactados,
@@ -1284,16 +1252,16 @@ def mostrar_dashboard_productividad(metricas):
     """
     if not metricas:
         return
-    
+
     st.markdown("### 📊 DASHBOARD DE PRODUCTIVIDAD")
-    
+
     # Tarjetas principales
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         delta_class = "metric-positive" if metricas['delta_dias'] >= 0 else "metric-negative"
         delta_icon = "📈" if metricas['delta_dias'] >= 0 else "📉"
-        
+
         st.markdown(f"""
         <div class="productivity-card">
             <h4>📞 Llamadas Hoy</h4>
@@ -1303,7 +1271,7 @@ def mostrar_dashboard_productividad(metricas):
             </div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
         st.markdown(f"""
         <div class="productivity-card">
@@ -1312,11 +1280,11 @@ def mostrar_dashboard_productividad(metricas):
             <div>Tasa: {metricas['tasa_contacto']:.1f}%</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col3:
         duracion_minutos = int(metricas['duracion_promedio'] / 60) if metricas['duracion_promedio'] > 0 else 0
         duracion_segundos = int(metricas['duracion_promedio'] % 60) if metricas['duracion_promedio'] > 0 else 0
-        
+
         st.markdown(f"""
         <div class="productivity-card">
             <h4>⏱️ Duración Promedio</h4>
@@ -1324,7 +1292,7 @@ def mostrar_dashboard_productividad(metricas):
             <div>{metricas['duracion_promedio']:.0f} segundos</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col4:
         st.markdown(f"""
         <div class="productivity-card">
@@ -1333,12 +1301,12 @@ def mostrar_dashboard_productividad(metricas):
             <div>Pendientes: {metricas['pendientes']}</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     # Barra de progreso diaria
     st.markdown("### 🎯 META DIARIA")
-    
+
     progress_color = "#28a745" if metricas['progreso_diario'] >= 100 else "#ffc107" if metricas['progreso_diario'] >= 50 else "#dc3545"
-    
+
     st.markdown(f"""
     <div style="text-align: center; margin-bottom: 10px;">
         <strong>Progreso: {metricas['llamadas_hoy']} / {metricas['meta_diaria']} llamadas ({metricas['progreso_diario']:.1f}%)</strong>
@@ -1348,7 +1316,7 @@ def mostrar_dashboard_productividad(metricas):
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Mensaje motivacional
     if metricas['progreso_diario'] >= 100:
         st.success("🎉 ¡Felicidades! Has alcanzado tu meta diaria")
@@ -1372,38 +1340,38 @@ def busqueda_avanzada(df_contactos, query):
     """
     if df_contactos is None or df_contactos.empty or not query.strip():
         return df_contactos, []
-    
+
     query = query.lower().strip()
     resultados = []
-    
+
     for idx, contacto in df_contactos.iterrows():
         puntuacion = 0
         coincidencias = []
-        
+
         # Búsqueda en nombre (3 puntos)
         nombre = str(contacto.get('nombre', '')).lower()
         if query in nombre:
             puntuacion += 3
             coincidencias.append(f"Nombre: {contacto.get('nombre', '')}")
-        
+
         # Búsqueda en teléfono (2 puntos)
         telefono = str(contacto.get('telefono', '')).replace('+57', '').replace('+', '')
         if query in telefono:
             puntuacion += 2
             coincidencias.append(f"Teléfono: {contacto.get('telefono', '')}")
-        
+
         # Búsqueda en notas/observaciones (1 punto)
         notas = str(contacto.get('observacion', '')).lower()
         if query in notas:
             puntuacion += 1
             coincidencias.append("Notas")
-        
+
         # Búsqueda en estado
         estado = str(contacto.get('estado', '')).lower()
         if query in estado:
             puntuacion += 1
             coincidencias.append(f"Estado: {contacto.get('estado', '')}")
-        
+
         if puntuacion > 0:
             resultados.append({
                 'idx': idx,
@@ -1411,10 +1379,10 @@ def busqueda_avanzada(df_contactos, query):
                 'coincidencias': coincidencias,
                 'contacto': contacto
             })
-    
+
     # Ordenar por puntuación (más relevante primero)
     resultados.sort(key=lambda x: x['puntuacion'], reverse=True)
-    
+
     if resultados:
         # Crear DataFrame con resultados ordenados
         indices_resultado = [r['idx'] for r in resultados]
@@ -1434,17 +1402,17 @@ def mostrar_feedback_busqueda(resultados, query):
         if query.strip():
             st.info(f"🔍 No se encontraron resultados para '{query}'")
         return
-    
+
     total_resultados = len(resultados)
     puntuacion_max = max(r['puntuacion'] for r in resultados)
-    
+
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c8); padding: 10px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 15px;">
         <strong>🔍 Resultados encontrados:</strong> {total_resultados} contactos para "{query}"<br>
         <small>📊 Relevancia máxima: {puntuacion_max}/5 puntos</small>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Mostrar los 3 mejores resultados con detalles
     st.markdown("**🌟 Mejores coincidencias:**")
     for i, resultado in enumerate(resultados[:3]):
@@ -1452,7 +1420,7 @@ def mostrar_feedback_busqueda(resultados, query):
         telefono = str(contacto.get('telefono', ''))
         if not telefono.startswith('+'):
             telefono = f"+57{telefono}"
-        
+
         st.markdown(f"""
         <div style="background: #f8f9fa; padding: 8px; border-radius: 5px; margin-bottom: 5px; border-left: 3px solid #007bff;">
             <strong>{i+1}. {contacto.get('nombre', '')}</strong> - {telefono}<br>
@@ -1474,11 +1442,11 @@ def analizar_notificaciones_contextuales(df_contactos, metricas):
     """
     if df_contactos is None or metricas is None:
         return []
-    
+
     notificaciones = []
     ahora = obtener_hora_bogota()
     hora_actual = ahora.hour
-    
+
     # 1. Alerta de fin de jornada si meta no alcanzada
     if hora_actual >= 17 and metricas.get('progreso_diario', 0) < 80:
         llamadas_faltantes = metricas.get('meta_diaria', 50) - metricas.get('llamadas_hoy', 0)
@@ -1490,11 +1458,11 @@ def analizar_notificaciones_contextuales(df_contactos, metricas):
             'color': '#dc3545',
             'recomendacion': 'Concéntrate en llamadas rápidas o reagenda contactos difíciles'
         })
-    
+
     # 2. Alerta de sin pendientes pero con programadas
     pendientes = metricas.get('pendientes', 0)
     programadas = metricas.get('programados', 0)
-    
+
     if pendientes == 0 and programadas > 0:
         notificaciones.append({
             'tipo': 'sin_pendientes',
@@ -1504,12 +1472,12 @@ def analizar_notificaciones_contextuales(df_contactos, metricas):
             'color': '#ffc107',
             'recomendacion': 'Revisa tus llamadas programadas y prepárate para las próximas'
         })
-    
+
     # 3. Alerta de alta tasa de no contestación (>70%)
     gestionados = metricas.get('contactados', 0) + metricas.get('no_contactados', 0)
     if gestionados > 10:  # Solo si hay suficientes llamadas
         tasa_no_contestacion = (metricas.get('no_contactados', 0) / gestionados * 100) if gestionados > 0 else 0
-        
+
         if tasa_no_contestacion > 70:
             notificaciones.append({
                 'tipo': 'alta_no_contestacion',
@@ -1519,7 +1487,7 @@ def analizar_notificaciones_contextuales(df_contactos, metricas):
                 'color': '#fd7e14',
                 'recomendacion': 'Considera cambiar el horario de llamadas o revisar la calidad de los datos'
             })
-    
+
     # 4. Recomendación de mejor momento para llamar
     if 9 <= hora_actual <= 11:
         notificaciones.append({
@@ -1548,7 +1516,7 @@ def analizar_notificaciones_contextuales(df_contactos, metricas):
             'color': '#6c757d',
             'recomendacion': 'Considera reprogramar para mañana o enfocarte en contactos prioritarios'
         })
-    
+
     return notificaciones
 
 def mostrar_notificaciones_inteligentes(notificaciones):
@@ -1559,9 +1527,9 @@ def mostrar_notificaciones_inteligentes(notificaciones):
     """
     if not notificaciones:
         return
-    
+
     st.markdown("### 💡 NOTIFICACIONES INTELIGENTES")
-    
+
     for notificacion in notificaciones:
         icono_urgencia = {
             'alta': '🔴',
@@ -1569,7 +1537,7 @@ def mostrar_notificaciones_inteligentes(notificaciones):
             'baja': '🟢',
             'info': '🔵'
         }.get(notificacion['urgencia'], '⚪')
-        
+
         st.markdown(f"""
         <div style="
             background: linear-gradient(135deg, {notificacion['color']}22, {notificacion['color']}44);
@@ -1601,11 +1569,11 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
     if df_contactos is None or df_contactos.empty:
         st.info("📊 No hay datos disponibles para generar reportes.")
         return
-    
+
     # Configuración de zona horaria
     bogota_tz = timezone('America/Bogota')
     ahora = datetime.now(bogota_tz)
-    
+
     # Preparar datos para análisis
     try:
         # Datos de contactos
@@ -1614,36 +1582,24 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
         no_contesto = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
         programadas = len(df_contactos[df_contactos['estado'] == 'Programada'])
-        
+
         # Calcular tasa de respuesta
         if (llamados + no_contesto) > 0:
             tasa_respuesta = (llamados / (llamados + no_contesto)) * 100
         else:
             tasa_respuesta = 0
-        
+
         # Datos históricos si hay informe
         datos_semanales = []
         if df_informe is not None and not df_informe.empty:
-            # Preprocesar fechas para filtrado eficiente
-            if 'fecha_llamada' in df_informe.columns:
-                df_informe['fecha_dt'] = pd.to_datetime(df_informe['fecha_llamada'], errors='coerce')
-            
             # Últimos 7 días
             for i in range(7):
                 fecha = ahora - timedelta(days=i)
                 dia_semana = fecha.strftime('%A')
-                
+
                 # Filtrar datos del día
-                if 'fecha_dt' in df_informe.columns:
-                    dia_informe = df_informe[df_informe['fecha_dt'].dt.date == fecha.date()]
-                elif 'fecha' in df_informe.columns:
-                    try:
-                        dia_informe = df_informe[df_informe['fecha'] == fecha.strftime('%Y-%m-%d')]
-                    except KeyError:
-                        dia_informe = pd.DataFrame()
-                else:
-                    dia_informe = pd.DataFrame()
-                
+                dia_informe = df_informe[df_informe['fecha'] == fecha.strftime('%Y-%m-%d')]
+
                 if not dia_informe.empty:
                     llamadas_dia = dia_informe['llamadas_efectivas'].sum()
                     no_contesto_dia = dia_informe['no_contesto'].sum()
@@ -1652,7 +1608,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                     llamadas_dia = 0
                     no_contesto_dia = 0
                     duracion_promedio = 0
-                
+
                 datos_semanales.append({
                     'dia': dia_semana,
                     'fecha': fecha.strftime('%Y-%m-%d'),
@@ -1666,12 +1622,12 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             for i in range(7):
                 fecha = ahora - timedelta(days=i)
                 dia_semana = fecha.strftime('%A')
-                
+
                 # Simulación basada en rendimiento actual
                 factor_simulacion = 0.8 + (random.random() * 0.4)  # Variación 20%
                 llamadas_sim = int(llamados * factor_simulacion / 7) if i == 0 else int(llamados * factor_simulacion / 7 * (0.5 + random.random()))
                 no_contesto_sim = int(no_contesto * factor_simulacion / 7) if i == 0 else int(no_contesto * factor_simulacion / 7 * (0.5 + random.random()))
-                
+
                 datos_semanales.append({
                     'dia': dia_semana,
                     'fecha': fecha.strftime('%Y-%m-%d'),
@@ -1680,48 +1636,48 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                     'tasa_respuesta': (llamadas_sim / (llamadas_sim + no_contesto_sim) * 100) if (llamadas_sim + no_contesto_sim) > 0 else 0,
                     'duracion_promedio': 180 + (random.random() * 120)  # 3-5 minutos promedio
                 })
-        
+
         df_semanal = pd.DataFrame(datos_semanales[::-1])  # Orden cronológico
-        
+
         # Título del reporte
         st.markdown("### 📈 Reportes y Análisis Personal")
         st.markdown(f"**Análisis personalizado para el agente {st.session_state.agente_id}**")
         st.markdown(f"**Período:** {ahora.strftime('%d de %B de %Y')}")
-        
+
         # Métricas Clave del Período
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             st.metric(
                 "📞 Llamadas Efectivas", 
                 llamados,
                 delta=f"{tasa_respuesta:.1f}% tasa respuesta"
             )
-        
+
         with col2:
             st.metric(
                 "⏳ Pendientes", 
                 pendientes,
                 delta=f"{((pendientes/total_contactos)*100):.1f}% del total"
             )
-        
+
         with col3:
             st.metric(
                 "❌ No Contestaron", 
                 no_contesto,
                 delta=f"{((no_contesto/total_contactos)*100):.1f}% del total"
             )
-        
+
         with col4:
             st.metric(
                 "📅 Programadas", 
                 programadas,
                 delta=f"{((programadas/total_contactos)*100):.1f}% del total"
             )
-        
+
         # Gráfico de Tendencias Semanales Interactivo
         st.markdown("#### 📊 Tendencias Semanales de Llamadas")
-        
+
         # Crear gráfico interactivo con Plotly
         fig_tendencias = px.line(
             df_semanal, 
@@ -1731,22 +1687,22 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             labels={'value': 'Cantidad de Llamadas', 'dia': 'Día de la Semana'},
             color_discrete_map={'llamadas': '#28a745', 'no_contesto': '#dc3545'}
         )
-        
+
         fig_tendencias.update_layout(
             hovermode='x unified',
             showlegend=True,
             height=400
         )
-        
+
         fig_tendencias.update_traces(
             hovertemplate='<b>%{fullData.name}</b><br>Día: %{x}<br>Llamadas: %{y}<extra></extra>'
         )
-        
+
         st.plotly_chart(fig_tendencias, use_container_width=True)
-        
+
         # Gráfico de Tasa de Respuesta
         st.markdown("#### 📈 Tasa de Respuesta Semanal")
-        
+
         fig_respuesta = px.bar(
             df_semanal,
             x='dia',
@@ -1756,25 +1712,25 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             color='tasa_respuesta',
             color_continuous_scale='RdYlGn'
         )
-        
+
         fig_respuesta.update_layout(
             height=350,
             showlegend=False
         )
-        
+
         fig_respuesta.update_traces(
             hovertemplate='<b>Día: %{x}</b><br>Tasa Respuesta: %{y:.1f}%<extra></extra>'
         )
-        
+
         st.plotly_chart(fig_respuesta, use_container_width=True)
-        
+
         # Insights y Recomendaciones Personalizadas
         st.markdown("#### 🎯 Insights y Recomendaciones Personalizadas")
-        
+
         # Análisis de rendimiento
         insights = []
         recomendaciones = []
-        
+
         # Análisis de tendencia
         if len(df_semanal) >= 3:
             tendencia_llamadas = df_semanal['llamadas'].tail(3).mean() - df_semanal['llamadas'].head(3).mean()
@@ -1784,7 +1740,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             else:
                 insights.append("📉 **Tendencia a la Baja:** Tu volumen de llamadas ha disminuido recientemente.")
                 recomendaciones.append("🔄 **Revisa tu enfoque:** Considera ajustar horarios o estrategias de contacto.")
-        
+
         # Análisis de tasa de respuesta
         if tasa_respuesta >= 70:
             insights.append("🎯 **Excelente Tasa de Respuesta:** Tu tasa de respuesta es muy buena.")
@@ -1795,7 +1751,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         else:
             insights.append("⚠️ **Tasa de Respuesta Baja:** Necesitas mejorar la efectividad de contacto.")
             recomendaciones.append("🎯 **Enfócate en horarios óptimos:** 9-11 AM y 2-4 PM suelen tener mejores tasas.")
-        
+
         # Análisis de carga de trabajo
         if pendientes > total_contactos * 0.3:
             insights.append("📋 **Alta Carga Pendiente:** Tienes muchos contactos por gestionar.")
@@ -1803,12 +1759,12 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         elif pendientes < total_contactos * 0.1:
             insights.append("✅ **Carga Manejable:** Tienes una carga de trabajo equilibrada.")
             recomendaciones.append("🎯 **Calidad sobre cantidad:** Enfócate en la calidad de cada conversación.")
-        
+
         # Análisis de programación
         if programadas > 0:
             insights.append(f"📅 **Llamadas Programadas:** Tienes {programadas} llamadas agendadas.")
             recomendaciones.append("⏰ **Prepárate con anticipación:** Revisa notas y prepara material para llamadas programadas.")
-        
+
         # Análisis de hora actual
         hora_actual = ahora.hour
         if 9 <= hora_actual <= 11:
@@ -1820,35 +1776,35 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         elif hora_actual >= 18:
             insights.append("🌃 **Fin de Jornada:** Las tasas de respuesta tienden a bajar.")
             recomendaciones.append("📋 **Prepara el día siguiente:** Organiza tus contactos para mañana.")
-        
+
         # Mostrar insights y recomendaciones
         col_insights, col_recomendaciones = st.columns(2)
-        
+
         with col_insights:
             st.markdown("""
             <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 4px solid #007bff;">
                 <h4>🔍 Insights Clave</h4>
             </div>
             """, unsafe_allow_html=True)
-            
+
             for insight in insights:
                 st.markdown(f"<div style='margin: 8px 0;'>{insight}</div>", unsafe_allow_html=True)
-        
+
         with col_recomendaciones:
             st.markdown("""
             <div style="background-color: #f0f8f0; padding: 15px; border-radius: 10px; border-left: 4px solid #28a745;">
                 <h4>💡 Recomendaciones</h4>
             </div>
             """, unsafe_allow_html=True)
-            
+
             for recomendacion in recomendaciones:
                 st.markdown(f"<div style='margin: 8px 0;'>{recomendacion}</div>", unsafe_allow_html=True)
-        
+
         # Métricas Adicionales
         st.markdown("#### 📊 Métricas Detalladas del Período")
-        
+
         col_metricas1, col_metricas2, col_metricas3 = st.columns(3)
-        
+
         with col_metricas1:
             # Mejor día de la semana
             mejor_dia = df_semanal.loc[df_semanal['llamadas'].idxmax()]
@@ -1859,7 +1815,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                 <p>{mejor_dia['llamadas']} llamadas</p>
             </div>
             """, unsafe_allow_html=True)
-        
+
         with col_metricas2:
             # Promedio semanal
             promedio_semanal = df_semanal['llamadas'].mean()
@@ -1870,13 +1826,13 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                 <p>llamadas por día</p>
             </div>
             """, unsafe_allow_html=True)
-        
+
         with col_metricas3:
             # Meta diaria y progreso
             meta_diaria = st.session_state.get('meta_diaria', 50)
             progreso_meta = (llamados / meta_diaria) * 100 if meta_diaria > 0 else 0
             color_progreso = '#28a745' if progreso_meta >= 80 else '#ffc107' if progreso_meta >= 50 else '#dc3545'
-            
+
             st.markdown(f"""
             <div style="background-color: #fff8e8; padding: 15px; border-radius: 10px; text-align: center;">
                 <h5>🎯 Meta Diaria</h5>
@@ -1887,17 +1843,17 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        
+
         # Tabla de datos detallados
         st.markdown("#### 📋 Datos Detallados de la Semana")
-        
+
         df_mostrar = df_semanal[['dia', 'llamadas', 'no_contesto', 'tasa_respuesta', 'duracion_promedio']].copy()
         df_mostrar.columns = ['Día', 'Llamadas', 'No Contestó', 'Tasa Respuesta (%)', 'Duración Promedio (s)']
         df_mostrar['Tasa Respuesta (%)'] = df_mostrar['Tasa Respuesta (%)'].round(1)
         df_mostrar['Duración Promedio (s)'] = df_mostrar['Duración Promedio (s)'].round(0).astype(int)
-        
+
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-        
+
         # Footer del reporte
         st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; margin-top: 20px; text-align: center;">
@@ -1905,7 +1861,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             <p><em>Los datos se actualizan en tiempo real según tu actividad</em></p>
         </div>
         """, unsafe_allow_html=True)
-        
+
     except Exception as e:
         st.error(f"❌ Error al generar reportes: {e}")
         print(f"[ERROR] Error en generar_reportes_personalizados: {e}")
@@ -1920,7 +1876,7 @@ if 'agente_id' not in st.session_state:
             if ced in CEDULAS_AUTORIZADAS:
                 # Validar si el agente tiene sheet individual configurado
                 has_access, access_message = validate_agent_access(ced)
-                
+
                 if not has_access:
                     st.error(f"🚫 **Acceso Denegado**")
                     st.error(f"⚠️ {access_message}")
@@ -1931,18 +1887,18 @@ if 'agente_id' not in st.session_state:
                     st.warning("🔒 Solo agentes con sheet individual pueden usar el sistema")
                     add_log(f"ACCESO_DENEGADO: {ced} - Sin sheet individual", "AUTH")
                     st.stop()
-                
+
                 # Obtener número celular del agente desde secrets
                 numero_celular = NUMEROS_CELULAR_AGENTES.get(ced)
-                
+
                 if not numero_celular:
                     st.error(f"⚠️ No se encontró número celular configurado para la cédula {ced}. Contacta al administrador.")
                     st.stop()
-                
+
                 st.session_state.agente_id = ced
                 st.session_state.numero_celular_agente = numero_celular
                 add_log(f"LOGIN_EXITOSO - Número: {numero_celular} - Sheet individual: SÍ", "AUTH")
-                
+
                 # Cargar contactos automáticamente al iniciar sesión
                 with st.spinner("Cargando tus contactos asignados..."):
                     st.session_state.df_contactos = cargar_contactos_agente(ced)
@@ -1986,7 +1942,7 @@ if 'ultimo_autoguardado' not in st.session_state:
 def verificar_autoguardado():
     """Verifica si es necesario auto-guardar cambios pendientes"""
     ahora = time.time()
-    
+
     # Auto-guardar cada 30 segundos si hay cambios pendientes
     if st.session_state.cambios_pendientes and (ahora - st.session_state.ultimo_autoguardado) > 30:
         if URL_SHEET_CONTACTOS and st.session_state.df_contactos is not None:
@@ -2008,14 +1964,14 @@ def mostrar_historial_notas_visual(contacto, idx):
     con timestamps, categorías y separación clara entre cada nota.
     """
     notas_completas = str(contacto.get('observacion', '')) if pd.notna(contacto.get('observacion')) else ''
-    
+
     if notas_completas and notas_completas.strip():
         with st.expander(f"📋 Historial Completo de Notas - {contacto['nombre']}", expanded=False):
             # Parsear notas separadas por " | "
             notas_individuales = notas_completas.split(' | ')
-            
+
             st.markdown("**📝 Cronología de todas las notas (más reciente primero):**")
-            
+
             import re
             for i, nota_individual in enumerate(reversed(notas_individuales)):
                 nota_individual = nota_individual.strip()
@@ -2023,13 +1979,13 @@ def mostrar_historial_notas_visual(contacto, idx):
                     # Detectar timestamp [YYYY-MM-DD HH:MM] y categoría (Categoría)
                     timestamp_categoria_match = re.search(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*\(([^)]+)\)', nota_individual)
                     timestamp_solo_match = re.search(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]', nota_individual)
-                    
+
                     if timestamp_categoria_match:
                         # Formato nuevo: [timestamp] (categoría) nota
                         timestamp = timestamp_categoria_match.group(1)
                         categoria = timestamp_categoria_match.group(2)
                         nota_texto = nota_individual.replace(f'[{timestamp}] ({categoria})', '').strip()
-                        
+
                         # Colores por categoría
                         if categoria == 'Pendiente':
                             border_color = '#ffc107'  # Amarillo
@@ -2055,9 +2011,9 @@ def mostrar_historial_notas_visual(contacto, idx):
                             border_color = '#6c757d'  # Gris
                             bg_color = '#f8f9fa'
                             categoria_icon = '📝'
-                        
+
                         orden_badge = "🟢 **MÁS RECIENTE**" if i == 0 else f"#{len(notas_individuales) - i}"
-                        
+
                         st.markdown(f"""
                         <div style="
                             border-left: 4px solid {border_color}; 
@@ -2079,14 +2035,14 @@ def mostrar_historial_notas_visual(contacto, idx):
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                        
+
                     elif timestamp_solo_match:
                         # Formato anterior: [timestamp] nota
                         timestamp = timestamp_solo_match.group(1)
                         nota_texto = nota_individual.replace(f'[{timestamp}]', '').strip()
-                        
+
                         orden_badge = "🟡 **RECIENTE**" if i == 0 else f"#{len(notas_individuales) - i}"
-                        
+
                         st.markdown(f"""
                         <div style="
                             border-left: 4px solid #1f77b4; 
@@ -2110,7 +2066,7 @@ def mostrar_historial_notas_visual(contacto, idx):
                     else:
                         # Nota sin timestamp (muy antigua)
                         orden_badge = "📄 **HISTÓRICA**" if i == len(notas_individuales) - 1 else f"#{len(notas_individuales) - i}"
-                        
+
                         st.markdown(f"""
                         <div style="
                             border-left: 4px solid #28a745; 
@@ -2127,7 +2083,7 @@ def mostrar_historial_notas_visual(contacto, idx):
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-            
+
             # Mostrar estadísticas del historial
             total_notas = len([n for n in notas_individuales if n.strip()])
             categorias_detectadas = set()
@@ -2135,7 +2091,7 @@ def mostrar_historial_notas_visual(contacto, idx):
                 categoria_match = re.search(r'\([^)]+\)', nota)
                 if categoria_match:
                     categorias_detectadas.add(categoria_match.group(0).strip('()'))
-            
+
             st.markdown("---")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -2144,7 +2100,7 @@ def mostrar_historial_notas_visual(contacto, idx):
                 st.metric("🔄 Categorías", len(categorias_detectadas) if categorias_detectadas else 1)
             with col3:
                 st.metric("📍 Estado Actual", contacto.get('estado', 'Sin estado'))
-            
+
             if categorias_detectadas:
                 st.caption(f"🏷️ **Categorías registradas:** {', '.join(sorted(categorias_detectadas))}")
     else:
@@ -2166,9 +2122,9 @@ def detectar_interaccion_usuario():
             st.session_state.usuario_interactuando = True
             st.session_state.ultima_interaccion = time.time()
             print(f"[DEBUG] Interacción detectada - Pausando refresh agresivo")
-    
+
     st.session_state._last_widget_state = {k: v for k, v in st.session_state.items() if not k.startswith('_')}
-    
+
     # Si han pasado más de 3 segundos sin interacción, permitir refresh
     if time.time() - st.session_state.ultima_interaccion > 3:
         st.session_state.usuario_interactuando = False
@@ -2176,7 +2132,7 @@ def detectar_interaccion_usuario():
 def refresh_inteligente_llamada(forzar=False):
     """Refresh inteligente que respeta la interacción del usuario"""
     detectar_interaccion_usuario()
-    
+
     # Si el usuario está interactuando, usar refresh menos agresivo
     if st.session_state.usuario_interactuando and not forzar:
         # Refresh cada 5 segundos cuando el usuario está interactuando
@@ -2208,40 +2164,40 @@ def verificar_grabaciones_pendientes():
         df_informe = read_sheet("0")
         if df_informe.empty:
             return
-        
+
         # Asegurar que existe la columna grabacion_pendiente
         if 'grabacion_pendiente' not in df_informe.columns:
             df_informe['grabacion_pendiente'] = ''
-        
+
         # Filtrar registros con grabación pendiente
         mask_pendientes = (df_informe['grabacion_pendiente'] == 'SI') & (df_informe['url_grabacion'].fillna('') == '')
         if not mask_pendientes.any():
             return
-        
+
         df_pendientes = df_informe[mask_pendientes].copy()
         print(f"[GRABACION] 🔍 Verificando {len(df_pendientes)} grabaciones pendientes")
-        
+
         now = datetime.now()
         grabaciones_actualizadas = 0
-        
+
         for idx, row in df_pendientes.iterrows():
             call_sid = row.get('sid_llamada', '')
             if not call_sid or pd.isna(call_sid):
                 continue
-            
+
             try:
                 fecha_llamada = pd.to_datetime(row['fecha_llamada'])
                 tiempo_transcurrido = (now - fecha_llamada).total_seconds()
             except:
                 continue
-            
+
             # ESTRATEGIA MEJORADA DE VERIFICACIÓN
             # - Primera verificación: 30 segundos
             # - Verificaciones frecuentes: Cada 2 mins hasta 15 mins
             # - Verificaciones normales: Cada 5 mins después
-            
+
             debe_verificar = False
-            
+
             if tiempo_transcurrido >= 30 and tiempo_transcurrido < 900:
                 # Entre 30 seg y 15 mins: verificar cada 2 minutos
                 minutos_transcurridos = int(tiempo_transcurrido / 60)
@@ -2253,17 +2209,17 @@ def verificar_grabaciones_pendientes():
                 if tiempo_transcurrido % 300 < 30:
                     debe_verificar = True
                     print(f"[GRABACION] 🐌 Verificación normal (>15min): {call_sid[:8]}... - {int(tiempo_transcurrido)}s")
-            
+
             if not debe_verificar:
                 continue
-            
+
             # Timeout extendido: 30 minutos en lugar de 15
             if tiempo_transcurrido > 1800:
                 df_informe.at[idx, 'grabacion_pendiente'] = 'TIMEOUT'
                 grabaciones_actualizadas += 1
                 print(f"[GRABACION] ⏰ Timeout extendido para {call_sid[:8]}... ({int(tiempo_transcurrido/60)}min)")
                 continue
-            
+
             try:
                 recordings = client.recordings.list(call_sid=call_sid, limit=1)
                 if recordings:
@@ -2273,7 +2229,7 @@ def verificar_grabaciones_pendientes():
                     df_informe.at[idx, 'grabacion_pendiente'] = 'NO'
                     grabaciones_actualizadas += 1
                     print(f"[GRABACION] ✅ URL encontrada: {call_sid[:8]}... ({int(tiempo_transcurrido)}s)")
-                    
+
                     # Intentar transcripción si hay URL
                     try:
                         transcription_sid = solicitar_transcripcion(recording_sid)
@@ -2284,10 +2240,10 @@ def verificar_grabaciones_pendientes():
                         print(f"[GRABACION] ⚠️ Error solicitando transcripción: {e_trans}")
                 else:
                     print(f"[GRABACION] ❌ Sin grabación aún: {call_sid[:8]}... ({int(tiempo_transcurrido)}s)")
-                    
+
             except Exception as e:
                 print(f"[GRABACION] ❌ Error verificando {call_sid[:8]}...: {e}")
-        
+
         if grabaciones_actualizadas > 0:
             if update_sheet(df_informe, "0"):
                 print(f"[GRABACION] 💾 {grabaciones_actualizadas} grabaciones actualizadas")
@@ -2301,7 +2257,7 @@ with st.sidebar:
     st.header(f"Agente: {st.session_state.agente_id}")
     if st.session_state.numero_celular_agente:
         st.caption(f"📱 Celular: {st.session_state.numero_celular_agente}")
-    
+
     if not st.session_state.en_pausa:
         if st.button("☕ Iniciar Pausa"):
             st.session_state.en_pausa = True
@@ -2338,7 +2294,7 @@ with st.sidebar:
             st.success("✅ Logs guardados en Drive")
         else:
             st.error("❌ Error guardando logs")
-    
+
     if st.button("Cerrar Sesión"):
         # Guardar logs deshabilitado para evitar quota de Drive
         # Si necesitas guardar logs, usa el botón "💾 Guardar Logs" antes de cerrar sesión
@@ -2352,23 +2308,23 @@ st.title("Dialer Pro Camacol")
 # --- CONTADORES Y BARRAS DE PROGRESO ---
 if st.session_state.df_contactos is not None:
     df = st.session_state.df_contactos
-    
+
     # Contadores por categoría
     col1, col2, col3, col4 = st.columns(4)
     total_pendientes = len(df[df['estado'] == 'Pendiente'])
     total_no_contestaron = len(df[df['estado'] == 'No Contesto'])
     total_programadas = len(df[df['estado'] == 'Programada'])
     total_llamados = len(df[df['estado'].isin(['Llamado', 'Gestionado'])])
-    
+
     col1.metric("⏳ Pendientes", total_pendientes)
     col2.metric("📵 No Contestaron", total_no_contestaron)
     col3.metric("📅 Programadas", total_programadas)
     col4.metric("✅ Llamados", total_llamados)
-    
+
     # Barras de progreso
     st.divider()
     prog_col1, prog_col2 = st.columns([3, 1])
-    
+
     with prog_col1:
         # Barra de progreso total
         total_contactos = len(df)
@@ -2376,25 +2332,25 @@ if st.session_state.df_contactos is not None:
         progreso_total = (total_gestionados / total_contactos * 100) if total_contactos > 0 else 0
         st.write(f"**Progreso Total: {total_gestionados}/{total_contactos} ({progreso_total:.1f}%)**")
         st.progress(progreso_total / 100)
-        
+
         # Barra de progreso diario
         if 'meta_diaria' not in st.session_state:
             st.session_state.meta_diaria = 50
-        
+
         # Contar llamadas del día actual
         hoy = datetime.now().strftime("%Y-%m-%d")
         llamadas_hoy = len(df[(df['fecha_llamada'].astype(str).str.contains(hoy, na=False))])
         progreso_diario = (llamadas_hoy / st.session_state.meta_diaria * 100) if st.session_state.meta_diaria > 0 else 0
         st.write(f"**Progreso Diario: {llamadas_hoy}/{st.session_state.meta_diaria} ({progreso_diario:.1f}%)**")
         st.progress(min(progreso_diario / 100, 1.0))
-    
+
     with prog_col2:
         st.write("**Meta Diaria**")
         nueva_meta = st.number_input("Llamadas/día:", min_value=1, max_value=500, value=st.session_state.meta_diaria, step=5, key="input_meta")
         if nueva_meta != st.session_state.meta_diaria:
             st.session_state.meta_diaria = nueva_meta
             st.rerun()
-    
+
     st.divider()
 
 try:
@@ -2407,7 +2363,7 @@ tab_op, tab_met, tab_reportes, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Op
 
 with tab_met:
     st.subheader("📊 Dashboard de Productividad en Tiempo Real")
-    
+
     # Calcular y mostrar métricas
     if st.session_state.df_contactos is not None:
         # Obtener datos del informe para métricas avanzadas
@@ -2415,27 +2371,27 @@ with tab_met:
             df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
         except:
             df_informe = pd.DataFrame()
-        
+
         # Calcular métricas
         metricas = calcular_metricas_productividad(st.session_state.df_contactos, df_informe)
-        
+
         # Mostrar dashboard
         mostrar_dashboard_productividad(metricas)
-        
+
         # Auto-refresh cada 30 segundos para llamadas próximas
         if 'ultimo_refresh_dashboard' not in st.session_state:
             st.session_state.ultimo_refresh_dashboard = time.time()
-        
+
         if time.time() - st.session_state.ultimo_refresh_dashboard > 30:
             st.session_state.ultimo_refresh_dashboard = time.time()
             st.rerun()
-        
+
         st.caption("🔄 Auto-refresh cada 30 segundos")
     else:
         st.warning("⚠️ No hay datos de contactos disponibles")
-    
+
     st.divider()
-    
+
     # Métricas adicionales (mantener compatibilidad con datos históricos)
     st.subheader("📈 Métricas Históricas")
     if not df_historico.empty:
@@ -2457,15 +2413,15 @@ with tab_met:
 
 with tab_reportes:
     st.subheader("📈 Reportes y Análisis Personal")
-    
+
     # Obtener datos para reportes
     df_contactos = st.session_state.df_contactos
-    
+
     try:
         df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
     except:
         df_informe = pd.DataFrame()
-    
+
     # Generar reportes personalizados
     generar_reportes_personalizados(df_contactos, df_informe)
 
@@ -2487,27 +2443,27 @@ with tab_aud:
 with tab_pruebas:
     st.subheader("🧪 Módulo de Pruebas de Llamadas")
     st.write("Prueba la calidad de las llamadas con Click-to-Call")
-    
+
     col_test1, col_test2 = st.columns(2)
-    
+
     with col_test1:
         st.write("**Configuración de Llamada de Prueba**")
         numero_destino = st.text_input("📱 Número Destino (a quién llamar):", value="+57", key="test_destino")
         numero_origen = st.text_input("📞 Número Origen (tu número):", value="+57", key="test_origen")
-        
+
         st.info("""**Cómo funciona:**
         1. Twilio llama primero al **Número Destino**
         2. Si contesta, Twilio llama al **Número Origen** (tú)
         3. Cuando contestas, se conectan ambas llamadas
         4. Al destino le aparece el Número Origen en el Caller ID
         """)
-    
+
     with col_test2:
         st.write("**Iniciar Prueba**")
-        
+
         if 'test_call_sid' not in st.session_state:
             st.session_state.test_call_sid = None
-        
+
         if st.session_state.test_call_sid is None:
             if st.button("🚀 INICIAR LLAMADA DE PRUEBA", type="primary"):
                 if len(numero_destino) > 5 and len(numero_origen) > 5:
@@ -2522,14 +2478,14 @@ with tab_pruebas:
                             </Dial>
                         </Response>
                         """
-                        
+
                         # Crear llamada al destino primero
                         call = client.calls.create(
                             twiml=twiml_test,
                             to=numero_destino,
                             from_=twilio_number
                         )
-                        
+
                         st.session_state.test_call_sid = call.sid
                         st.success(f"✅ Llamada iniciada: {call.sid}")
                         st.info(f"📞 Llamando a {numero_destino}...")
@@ -2545,7 +2501,7 @@ with tab_pruebas:
             try:
                 test_call = client.calls(st.session_state.test_call_sid).fetch()
                 st.info(f"📊 Estado: {test_call.status}")
-                
+
                 if test_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
                     st.success(f"✅ Llamada finalizada: {test_call.status}")
                     if st.button("🔄 Nueva Prueba"):
@@ -2565,24 +2521,24 @@ with tab_op:
     if st.session_state.df_contactos is not None:
         # Verificar recordatorios próximos
         recordatorios = verificar_recordatorios_proximos(st.session_state.df_contactos)
-        
+
         # Mostrar recordatorios si hay alguno
         if recordatorios:
             mostrar_recordatorios(recordatorios)
-            
+
             # Auto-refresh más frecuente cuando hay recordatorios
             if 'ultimo_refresh_recordatorios' not in st.session_state:
                 st.session_state.ultimo_refresh_recordatorios = time.time()
-            
+
             # Refresh cada 15 segundos cuando hay recordatorios activos
             if time.time() - st.session_state.ultimo_refresh_recordatorios > 15:
                 st.session_state.ultimo_refresh_recordatorios = time.time()
                 st.rerun()
-    
+
     # Componente WebRTC de Twilio Client
     if 'webrtc_token' not in st.session_state:
         st.session_state.webrtc_token = None
-    
+
     # JavaScript para Twilio Device (WebRTC) - SDK v1.15.1
     # Leer el SDK de Twilio desde el archivo local
     try:
@@ -2591,10 +2547,10 @@ with tab_op:
     except Exception as e:
         st.error(f"Error cargando SDK de Twilio: {e}")
         twilio_sdk_content = "console.error('No se pudo cargar el SDK de Twilio');"
-    
+
     # Determinar si hay una llamada WebRTC pendiente
     numero_a_llamar = st.session_state.webrtc_numero if st.session_state.webrtc_activo else ''
-    
+
     twilio_webrtc_component = f"""
     <div id="twilio-device-status" style="padding: 10px; background: #f0f0f0; border-radius: 5px; margin-bottom: 10px;">
         <span id="device-status">🔴 Inicializando audio...</span>
@@ -2796,81 +2752,81 @@ with tab_op:
         setTimeout(initTwilioDevice, 100);
     </script>
     """
-    
+
     import streamlit.components.v1 as components
     components.html(twilio_webrtc_component, height=50)
 
 with tab_op:
     # Verificar grabaciones pendientes en segundo plano
     verificar_grabaciones_pendientes()
-    
+
     if st.session_state.df_contactos is not None:
         df = st.session_state.df_contactos
-        
+
         # --- SISTEMA DE NOTIFICACIONES INTELIGENTES ---
         # Calcular métricas para notificaciones contextuales
         try:
             df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
         except:
             df_informe = pd.DataFrame()
-        
+
         metricas = calcular_metricas_productividad(df, df_informe)
         notificaciones = analizar_notificaciones_contextuales(df, metricas)
-        
+
         if notificaciones:
             mostrar_notificaciones_inteligentes(notificaciones)
-        
+
         # --- BÚSQUEDA AVANZADA ---
         st.markdown("### 🔍 Búsqueda Avanzada")
         search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
-        
+
         opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True, key="pestana_opciones")
         # Lógica de mapeo de pestaña a estado del DF
         f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
-        
+
         # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
         if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
             # Usar variable de control separada (no modificar st.radio directamente)
             st.session_state.redireccionar_a_programadas = True
             # Limpiar el estado de redirección
             del st.session_state.pestana_actual
-        
+
         # 🔥 APLICAR REDIRECCIÓN SI ES NECESARIO
         if hasattr(st.session_state, 'redireccionar_a_programadas') and st.session_state.redireccionar_a_programadas:
             # Forzar la pestaña "Programadas" usando la lógica de mapeo
             f_est = "Programada"
             # Limpiar el estado de redirección
             del st.session_state.redireccionar_a_programadas
-        
+
         # Filtrado riguroso
         if "Gestionadas" in opc:
             # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
             df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
         else:
             df_work = df[df['estado'] == f_est]
-        
+
         # Aplicar búsqueda avanzada si hay término de búsqueda
         resultados_busqueda = []
         if search:
             df_work, resultados_busqueda = busqueda_avanzada(df_work, search)
             mostrar_feedback_busqueda(resultados_busqueda, search)
-        
+
         # Paginación: 30 contactos por página
         CONTACTOS_POR_PAGINA = 30
         total_contactos = len(df_work)
         total_paginas = (total_contactos - 1) // CONTACTOS_POR_PAGINA + 1 if total_contactos > 0 else 1
-        
+
         # Resetear página si cambia el filtro
         if 'ultimo_filtro' not in st.session_state:
             st.session_state.ultimo_filtro = f_est
         if st.session_state.ultimo_filtro != f_est:
             st.session_state.pagina_actual = 0
             st.session_state.ultimo_filtro = f_est
-        
+
         # Asegurar que la página actual esté en rango
         if st.session_state.pagina_actual >= total_paginas:
             st.session_state.pagina_actual = max(0, total_paginas - 1)
-        
+
         # Mostrar controles de paginación si hay más de 30 contactos
         if total_contactos > CONTACTOS_POR_PAGINA:
             col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
@@ -2884,7 +2840,7 @@ with tab_op:
                 if st.button("Siguiente ➡️", disabled=st.session_state.pagina_actual >= total_paginas - 1):
                     st.session_state.pagina_actual += 1
                     st.rerun()
-        
+
         # Obtener contactos de la página actual
         inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
         fin = inicio + CONTACTOS_POR_PAGINA
@@ -2893,7 +2849,7 @@ with tab_op:
         if not df_work.empty:
             # Mostrar TODOS los contactos de la página (hasta 30)
             st.write(f"**Mostrando {len(df_work)} contactos:**")
-            
+
             # Iterar sobre TODOS los contactos de la página
             for idx in df_work.index:
                 c = df_work.loc[idx]
@@ -2914,20 +2870,20 @@ with tab_op:
                                 fecha_formateada = fecha_prog.strftime("%Y-%m-%d %H:%M")
                                 ahora = obtener_hora_bogota()
                                 tiempo_restante = fecha_prog - ahora
-                                
+
                                 # MENSAJE MÁS VISIBLE Y DETALLADO
                                 if tiempo_restante.total_seconds() > 0:
                                     dias_restantes = int(tiempo_restante.total_seconds() / 86400)
                                     horas_restantes = int((tiempo_restante.total_seconds() % 86400) / 3600)
                                     minutos_restantes = int((tiempo_restante.total_seconds() % 3600) / 60)
-                                    
+
                                     if dias_restantes > 0:
                                         tiempo_texto = f"en {dias_restantes} día(s), {horas_restantes}h {minutos_restantes}m"
                                     elif horas_restantes > 0:
                                         tiempo_texto = f"en {horas_restantes}h {minutos_restantes}m"
                                     else:
                                         tiempo_texto = f"en {minutos_restantes} minutos"
-                                    
+
                                     st.markdown(f"""
                                     <div style="background: linear-gradient(135deg, #2196f3, #1976d2); color: white; padding: 15px; border-radius: 10px; border-left: 5px solid #0d47a1; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);">
                                         <div style="display: flex; align-items: center; margin-bottom: 8px;">
@@ -2963,15 +2919,15 @@ with tab_op:
                                     """, unsafe_allow_html=True)
                             except Exception as e:
                                 st.info(f"📅 Programado para: {c['proxima_llamada']}")
-                        
+
                         st.markdown(f"<div class='client-card'><h3>{c['nombre']}</h3><p>Tel: {tel}</p></div>", unsafe_allow_html=True)
-                        
+
                         # Mostrar historial completo de notas con categorías
                         mostrar_historial_notas_visual(c, idx)
-                        
+
                         nota_existente = st.session_state.draft_notas.get(idx, '')
                         nota = st.text_area("📝 Nueva Nota:", value=nota_existente, key=f"notas_{idx}", placeholder="Escriba aquí sus observaciones...")
-                        
+
                         # Auto-guardar cuando el agente modifica notas
                         if nota != nota_existente:
                             # Guardar en draft para evitar pérdida de datos
@@ -2979,7 +2935,7 @@ with tab_op:
                             # Limpiar draft después de guardar
                             if idx in st.session_state.draft_notas:
                                 del st.session_state.draft_notas[idx]
-                            
+
                             # Forzar refresh para mostrar el historial actualizado
                             refresh_inteligente_llamada(forzar=True)
 
@@ -2987,19 +2943,19 @@ with tab_op:
                         if not st.session_state.en_pausa:
                             # Verificar si hay llamada activa (Conference o WebRTC)
                             llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
-                            
+
                             if not llamada_activa:
                                 # Botón único de llamada con Conference Call (ACTIVO)
                                 if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True, key=f"call_{idx}"):
                                     try:
                                         # Crear conference call: Twilio llama primero al agente, luego al cliente
                                         # El cliente verá el número del agente como Caller ID
-                                         
+
                                         # Paso 1: Llamar al agente primero
                                         print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
-                                 
+
                                         conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                        
+
                                         # TwiML para el agente (con tonos de notificación)
                                         twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
@@ -3019,7 +2975,7 @@ with tab_op:
                                                 >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
-                                        
+
                                         # TwiML para el cliente (con beep de entrada para el agente y manejo de no contestación)
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
@@ -3037,7 +2993,7 @@ with tab_op:
                                                 >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
-                                        
+
                                         # Llamar al agente
                                         call_agente = client.calls.create(
                                             twiml=twiml_agente,
@@ -3046,10 +3002,10 @@ with tab_op:
                                             status_callback=f"{function_url_base}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
-                                        
+
                                         # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
                                         print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
-                                        
+
                                         call_cliente = client.calls.create(
                                             twiml=twiml_cliente,
                                             to=tel,
@@ -3058,14 +3014,14 @@ with tab_op:
                                             status_callback=f"{function_url_base}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
-                                        
+
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
                                         st.session_state.llamada_activa_sid = call_cliente.sid
                                         st.session_state.conference_name = conference_name
                                         st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
                                         st.session_state.t_inicio_dt = datetime.now()
                                         print(f"[DEBUG] Conference creada: {conference_name}")
-                                        
+
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
                                         st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
                                         time.sleep(1)
@@ -3078,7 +3034,7 @@ with tab_op:
                                 # ============================================================
                                 # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
                                 # ============================================================
-                                
+
                                 # --- OPCIÓN 1: Botón Server-Side (COMENTADO - No sirve para audio bidireccional) ---
                                 # if st.button("📞 LLAMAR (Server)", use_container_width=True, key=f"call_server_{idx}"):
                                 #     try:
@@ -3095,7 +3051,7 @@ with tab_op:
                                 #         st.rerun()
                                 #     except Exception as e:
                                 #         st.error(f"Error al iniciar llamada: {e}")
-                                
+
                                 # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
                                 if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
                                     # Marcar WebRTC como activo y guardar datos
@@ -3108,7 +3064,7 @@ with tab_op:
                                     st.rerun()
                             else:
                                 # --- MONITOR DINÁMICO ---
-                                
+
                                 # Verificar si es llamada WebRTC Y si este es el contacto activo
                                 if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
                                     # Monitor para WebRTC
@@ -3117,7 +3073,7 @@ with tab_op:
                                     segundos = tiempo_transcurrido % 60
                                     st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
                                     st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
-                                    
+
                                     # Buscar el SID de llamada WebRTC si no lo tenemos
                                     if st.session_state.webrtc_call_sid is None:
                                         try:
@@ -3135,64 +3091,64 @@ with tab_op:
                                                 st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
                                         except Exception as e:
                                             print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
-                                    
+
                                     # Verificar si la llamada sigue activa en Twilio
                                     call_ended_by_remote = False
                                     webrtc_final_status = 'Llamado'  # Por defecto
-                                    
+
                                     if st.session_state.webrtc_call_sid:
                                         try:
                                             remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
                                             print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
-                                            
+
                                             # Si la llamada terminó, determinar el estado final
                                             if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
                                                 call_ended_by_remote = True
-                                                
+
                                                 # Obtener datos de la llamada para clasificación
                                                 answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
                                                 duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
                                                 error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
                                                 print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
-                                                
+
                                                 # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
-                                                
+
                                                 # PRIORIDAD ALTA 1: Número inválido/inexistente (códigos ampliados)
                                                 if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.error(f"❌ Número inválido o inexistente (error {error_code})")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
-                                                
+
                                                 # PRIORIDAD MEDIA 1: Número bloqueado/spam/no entregado
                                                 elif remote_call.status == 'failed' and error_code in ['21610', '30006', '30004']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.error(f"🚫 Número bloqueado, spam o mensaje no entregado (error {error_code})")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado/no entregado: {error_code}")
-                                                
+
                                                 # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
                                                 elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
-                                                
+
                                                 # Estados intermedios - Llamada en progreso
                                                 elif remote_call.status in ['in-progress', 'queued', 'ringing']:
                                                     webrtc_final_status = 'Llamado'  # Asumimos que está en progreso
                                                     st.info(f"📞 Llamada en progreso: {remote_call.status}")
                                                     print(f"[DEBUG] Clasificado como Llamado - Estado intermedio: {remote_call.status}")
-                                                
+
                                                 # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
                                                 elif remote_call.status in ['no-answer', 'busy', 'canceled']:
                                                     webrtc_final_status = 'No Contesto'
                                                     st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
                                                     print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
-                                                
+
                                                 # Caso 2: Fallo genérico
                                                 elif remote_call.status == 'failed':
                                                     webrtc_final_status = 'No Contesto'
                                                     st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
                                                     print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
-                                                
+
                                                 # PRIORIDAD ALTA 3: Buzón de voz mejorado (detección ampliada)
                                                 elif answered_by in ['machine_start', 'machine_end_beep', 'machine_end_silence', 'fax']:
                                                     if duracion_twilio < 5:
@@ -3203,7 +3159,7 @@ with tab_op:
                                                         webrtc_final_status = 'No Contesto'
                                                         st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
                                                         print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz - Tipo: {answered_by}")
-                                                
+
                                                 # Caso 3: Contestó una persona (humano) - Validación de duración
                                                 elif answered_by == 'human':
                                                     if duracion_twilio >= 300:  # 5 minutos o más
@@ -3212,7 +3168,7 @@ with tab_op:
                                                     webrtc_final_status = 'Llamado'
                                                     st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
                                                     print(f"[DEBUG] Clasificado como Llamado por humano - Duración: {duracion_twilio}s")
-                                                
+
                                                 # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
                                                 elif remote_call.status == 'completed' and answered_by == 'unknown':
                                                     if duracion_twilio == 0:
@@ -3239,27 +3195,27 @@ with tab_op:
                                                         webrtc_final_status = 'Llamado'
                                                         st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
                                                         print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
-                                                
+
                                                 # Caso por defecto
                                                 else:
                                                     webrtc_final_status = 'Llamado'
                                                     st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
                                                     print(f"[DEBUG] Clasificado como Llamado por defecto")
-                                                
+
                                                 print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
                                         except Exception as e:
                                             print(f"[ERROR] Error verificando estado WebRTC: {e}")
-                                    
+
                                     # Botones en columnas (SIEMPRE mostrar durante llamada activa)
                                     finalizar_webrtc = False
                                     pausar_webrtc = False
-                                    
+
                                     if not call_ended_by_remote:
                                         btn_webrtc_col1, btn_webrtc_col2 = st.columns(2)
-                                        
+
                                         with btn_webrtc_col1:
                                             finalizar_webrtc = st.button("✅ FINALIZAR WebRTC", type="primary", key=f"fin_webrtc_{idx}")
-                                        
+
                                         with btn_webrtc_col2:
                                             if not st.session_state.grabacion_pausada:
                                                 pausar_webrtc = st.button("⏸️ PAUSAR GRABACIÓN", key=f"pause_webrtc_{idx}")
@@ -3268,26 +3224,26 @@ with tab_op:
                                     else:
                                         # Si la llamada terminó remotamente, marcar para finalizar automáticamente
                                         finalizar_webrtc = True
-                                    
+
                                     if pausar_webrtc:
                                         # Calcular duración hasta el momento
                                         dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                        
+
                                         print(f"[DEBUG] Intentando pausar grabación WebRTC para call_sid: {st.session_state.webrtc_call_sid}")
                                         print(f"[DEBUG] ⚠️ WebRTC no permite pausar grabación DURANTE la llamada")
                                         print(f"[DEBUG] La grabación se crea después de finalizar la llamada")
-                                        
+
                                         # Explicar al usuario la limitación de WebRTC
                                         st.error("⚠️ **WebRTC no permite pausar grabación durante la llamada**")
                                         st.info("📝 **La grabación se guardará automáticamente cuando finalices la llamada**")
-                                        
+
                                         # Opción: Finalizar llamada ahora para guardar grabación parcial
                                         if st.button("📞 Finalizar llamada ahora", key=f"finish_for_recording_{idx}"):
                                             print(f"[DEBUG] Finalizando llamada para guardar grabación parcial...")
                                             finalizar_webrtc = True
                                             st.success("📞 Finalizando llamada para guardar grabación...")
                                             st.rerun()
-                                        
+
                                         # Opción: Pausar la grabación en Twilio si tenemos el SID
                                         if st.session_state.webrtc_call_sid:
                                             print(f"[DEBUG] Intentando pausar grabación {st.session_state.webrtc_call_sid}...")
@@ -3295,13 +3251,13 @@ with tab_op:
                                                 # Primero verificar si existe la grabación
                                                 recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
                                                 print(f"[DEBUG] Grabaciones encontradas: {len(recordings)}")
-                                                
+
                                                 if recordings:
                                                     recording = recordings[0]
                                                     print(f"[DEBUG] Grabación SID: {recording.sid}")
                                                     print(f"[DEBUG] Grabación Status: {recording.status}")
                                                     print(f"[DEBUG] Grabación Duration: {recording.duration}")
-                                                    
+
                                                     # Intentar pausar
                                                     print(f"[DEBUG] Intentando pausar grabación {recording.sid}...")
                                                     client.recordings(recording.sid).update(status='paused')
@@ -3310,7 +3266,7 @@ with tab_op:
                                                 else:
                                                     print(f"[DEBUG] ⚠️ No se encontraron grabaciones activas para {st.session_state.webrtc_call_sid}")
                                                     st.warning("⚠️ No hay grabación activa para pausar")
-                                                    
+
                                                 # Guardar en Sheet Informe con estado "Grabación Pausada"
                                                 if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.webrtc_call_sid or ''):
                                                     st.session_state.grabacion_pausada = True
@@ -3318,7 +3274,7 @@ with tab_op:
                                                     st.success("✅ Grabación pausada y guardada en Sheet Informe")
                                                 else:
                                                     st.error("❌ Error guardando en Sheet Informe")
-                                                    
+
                                             except Exception as e:
                                                 print(f"[ERROR] Error pausando grabación WebRTC: {e}")
                                                 import traceback
@@ -3327,15 +3283,15 @@ with tab_op:
                                         else:
                                             print(f"[DEBUG] ⚠️ No hay webrtc_call_sid disponible")
                                             st.warning("⚠️ No hay SID de llamada WebRTC disponible")
-                                        
+
                                         time.sleep(1)
                                         st.rerun()
-                                    
+
                                     # Manejar finalización de WebRTC (manual o automática)
                                     if finalizar_webrtc or call_ended_by_remote:
                                         # Marcar si fue finalización manual por el agente
                                         agent_ended_call = finalizar_webrtc and not call_ended_by_remote
-                                        
+
                                         # Si es finalización manual, colgar la llamada en Twilio primero
                                         if finalizar_webrtc and st.session_state.webrtc_call_sid:
                                             try:
@@ -3343,17 +3299,17 @@ with tab_op:
                                                 time.sleep(1)
                                             except Exception as e:
                                                 print(f"[ERROR] Error colgando llamada: {e}")
-                                        
+
                                         # Determinar estado final: Si el agente finalizó manualmente, marcar como Gestionada
                                         if agent_ended_call:
                                             webrtc_final_status = 'Gestionada'
                                             print(f"[DEBUG] WebRTC - Finalización manual por agente - Clasificado como Gestionada")
                                         # Si no, mantener la clasificación automática ya determinada
-                                        
+
                                         # Guardar gestión
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
-                                        
+
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
                                         st.session_state.df_contactos.at[idx, 'estado'] = webrtc_final_status  # Mantener Llamado/No Contesto/Gestionada
@@ -3362,37 +3318,37 @@ with tab_op:
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
-                                        
+
                                         # Marcar como gestionado en campo adicional (si existe) o mantener estado original
                                         # El estado real (Llamado/No Contesto) se mantiene en 'estado'
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {webrtc_final_status}")
-                                        
+
                                         # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
                                         print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
                                         st.write(f" Guardando gestión: {webrtc_final_status}")
-                                        
+
                                         if URL_SHEET_INFORME:
                                             try:
                                                 st.write(" Sincronizando con Sheet Informe...")
-                                                
+
                                                 # Obtener información adicional de Twilio
                                                 url_grabacion = ''
                                                 precio_llamada = '0'
                                                 duracion_facturada = '0'
                                                 estado_respuesta = ''
                                                 codigo_error = ''
-                                                
+
                                                 try:
                                                     # Obtener TODOS los datos de la llamada de Twilio
                                                     if st.session_state.webrtc_call_sid:
                                                         call_data = client.calls(st.session_state.webrtc_call_sid).fetch()
-                                                        
+
                                                         # Datos básicos
                                                         precio_llamada = str(call_data.price) if call_data.price else '0'
                                                         duracion_facturada = str(call_data.duration) if call_data.duration else '0'
                                                         estado_respuesta = str(call_data.answered_by) if call_data.answered_by else 'unknown'
                                                         codigo_error = str(call_data.error_code) if hasattr(call_data, 'error_code') and call_data.error_code else ''
-                                                        
+
                                                         # Datos adicionales de Twilio Call Recording
                                                         account_sid = str(call_data.account_sid) if hasattr(call_data, 'account_sid') else ''
                                                         start_time = str(call_data.start_time) if hasattr(call_data, 'start_time') and call_data.start_time else ''
@@ -3406,17 +3362,17 @@ with tab_op:
                                                         date_created = str(call_data.date_created) if hasattr(call_data, 'date_created') and call_data.date_created else ''
                                                         parent_call_sid = str(call_data.parent_call_sid) if hasattr(call_data, 'parent_call_sid') and call_data.parent_call_sid else ''
                                                         phone_number_sid = str(call_data.phone_number_sid) if hasattr(call_data, 'phone_number_sid') and call_data.phone_number_sid else ''
-                                                        
+
                                                         print(f"[DEBUG] Datos de llamada obtenidos: duration={duracion_facturada}s, answered_by={estado_respuesta}, from={from_number}, to={to_number}")
-                                                    
+
                                                     # Esperar 5 segundos para que la grabación esté disponible
                                                     st.write(" Esperando grabación (5s)...")
                                                     time.sleep(5)
-                                                    
+
                                                     # Intentar obtener la grabación con retry (máximo 3 intentos)
                                                     max_intentos = 3
                                                     transcription_sid = None
-                                                    
+
                                                     for intento in range(max_intentos):
                                                         recordings = client.recordings.list(call_sid=st.session_state.webrtc_call_sid, limit=1)
                                                         if recordings:
@@ -3424,15 +3380,15 @@ with tab_op:
                                                             url_grabacion = f"https://api.twilio.com{recording.uri.replace('.json', '.mp3')}"
                                                             print(f"[DEBUG] Grabación encontrada: {url_grabacion}")
                                                             st.success(" Grabación disponible")
-                                                            
+
                                                             # PCI Mode no permite transcripciones automáticas - Grabación solamente
                                                             st.info(" PCI Mode - Solo grabación disponible")
                                                             print(f"[DEBUG] PCI Mode detectado - Transcripción no disponible")
                                                             print(f"[DEBUG] Grabación guardada: {recording.sid}")
-                                                            
+
                                                             # No intentar transcripción en PCI Mode para evitar errores
                                                             transcription_sid = None
-                                                            
+
                                                             break
                                                         else:
                                                             print(f"[DEBUG] Intento {intento + 1}/{max_intentos}: Grabación no disponible aún")
@@ -3442,11 +3398,11 @@ with tab_op:
                                                             else:
                                                                 st.warning(" Grabación no disponible aún - Se guardará sin URL")
                                                                 print(f"[WARNING] Grabación no encontrada después de {max_intentos} intentos")
-                                                    
+
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
                                                     st.warning(f" Error obteniendo datos de Twilio: {e_twilio}")
-                                                 
+
                                                 # Preparar fila para Sheet Informe con TODAS las columnas de Twilio
                                                 fila_informe = pd.DataFrame({
                                                     # Columnas del sistema
@@ -3457,7 +3413,7 @@ with tab_op:
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                                    
+
                                                     # Columnas de Twilio Call Recording
                                                     'call_sid': [st.session_state.webrtc_call_sid or ''],
                                                     'account_sid': [account_sid if 'account_sid' in locals() else ''],
@@ -3480,7 +3436,7 @@ with tab_op:
                                                     'transcription_sid': [transcription_sid if 'transcription_sid' in locals() else ''],
                                                     'grabacion_pendiente': ['SI' if not url_grabacion else 'NO']
                                                 })
-                                                
+
                                                 # Leer Sheet Informe actual (con caché para evitar rate limit)
                                                 try:
                                                     # Usar caché de session_state para evitar múltiples lecturas
@@ -3493,49 +3449,50 @@ with tab_op:
                                                     else:
                                                         df_informe_actual = st.session_state.df_informe_cache
                                                         print(f"[DEBUG] Usando caché de Informe: {len(df_informe_actual)} registros")
-                                                    
+
                                                     st.write(f" Registros en Informe: {len(df_informe_actual)}")
                                                 except Exception as e_read:
                                                     print(f"[ERROR] Error leyendo Informe: {e_read}")
                                                     df_informe_actual = pd.DataFrame()
-                                                
+
                                                 # Agregar nuevo registro
                                                 if df_informe_actual.empty:
                                                     df_informe_actualizado = fila_informe.copy()
                                                 else:
                                                     df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
-                                                
+
                                                 # Guardar en Sheet Informe
                                                 if update_sheet(df_informe_actualizado, "0"):
                                                     st.success(f" Guardado en Sheet Informe: {webrtc_final_status}")
                                                     add_log(f"WEBRTC_SYNC_INFORME: {c['nombre']} - {webrtc_final_status}", "DATA")
-                                                    
+
                                                     if not url_grabacion:
                                                         st.info(" Grabación pendiente - Se verificará en 5 minutos")
                                                         print(f"[GRABACION] Marcada como pendiente en Sheet Informe")
                                                 else:
                                                     st.warning(" Error guardando en Sheet Informe")
-                                                    
+
                                             except Exception as e_informe:
                                                 st.error(f" Error en Sheet Informe: {e_informe}")
-                                        
+
                                         # --- PASO 3: ACTUALIZACIÓN SEGURA DE SHEET LLAMADAS (solo fila específica) ---
                                         print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write(" Actualizando estado en Sheet Llamadas...")
-                                                # Usar actualización segura que busca por teléfono y actualiza ambos sheets
-                                                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "WEBRTC_END", contact_idx=idx):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
+
+                                                # Usar función segura que actualiza en el sheet compartido de salida
+                                                if update_call_status_safe(st.session_state.df_contactos, idx, webrtc_final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.webrtc_call_sid or '', URL_SHEET_CONTACTOS):
+                                                    st.success(" Estado actualizado en Sheet Llamadas (fila específica)")
                                                     add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
                                                     st.warning(" Error actualizando Sheet Llamadas")
                                             except Exception as e_llamadas:
                                                 st.error(f" Error en Sheet Llamadas: {e_llamadas}")
                                                 print(f"[ERROR] WebRTC Update Llamadas: {e_llamadas}")
-                                        
+
                                         add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
-                                        
+
                                         # --- PASO 4: LIMPIEZA DE ESTADO ---
                                         print(f"[DEBUG] WebRTC - Limpiando estado de llamada")
                                         st.session_state.webrtc_activo = False
@@ -3544,7 +3501,7 @@ with tab_op:
                                         st.session_state.webrtc_call_sid = None
                                         st.session_state.webrtc_idx = None
                                         st.session_state.grabacion_pausada = False
-                                        
+
                                         st.success(" Llamada WebRTC finalizada - Pasando al siguiente contacto...")
                                         time.sleep(2)
                                         st.rerun()
@@ -3556,45 +3513,45 @@ with tab_op:
                             if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
                                 try:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
-                                    
+
                                     # CRONÓMETRO EN TIEMPO REAL
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
                                     segundos = tiempo_transcurrido % 60
                                     st.markdown(f" ### Tiempo: {minutos:02d}:{segundos:02d}")
-                                    
+
                                     # 1. Consultar estado real en Twilio
                                     print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
                                     remote = client.calls(st.session_state.llamada_activa_sid).fetch()
                                     print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
                                     st.info(f" Estado Twilio: {remote.status}")
-                                    
+
                                     # 2. Definir condiciones de terminación
                                     call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                                     print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
-                                    
+
                                     # 3. Detectar casos especiales y colgar automáticamente
                                     answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
                                     es_maquina = answered_by in ['machine_start', 'fax']
-                                    
+
                                     # PRIORIDAD MEDIA 3: Timeout de conferencia INTELIGENTE (>60s con 1 solo participante)
                                     if not call_ended_by_system and tiempo_transcurrido > 60 and remote.status == 'in-progress':
                                         try:
                                             # Verificar cuántos participantes hay en la conferencia
                                             conference_name = st.session_state.get('conference_name', None)
                                             num_participantes = 0
-                                            
+
                                             if conference_name:
                                                 # Buscar la conferencia por nombre
                                                 conferences = client.conferences.list(friendly_name=conference_name, status='in-progress', limit=1)
-                                                
+
                                                 if conferences:
                                                     conference_sid = conferences[0].sid
                                                     # Contar participantes activos
                                                     participants = client.conferences(conference_sid).participants.list()
                                                     num_participantes = len([p for p in participants if p.status in ['connected', 'in-progress']])
                                                     print(f"[DEBUG] Conference {conference_name}: {num_participantes} participantes activos")
-                                                    
+
                                                     # Solo colgar si hay 1 solo participante (agente o cliente esperando solo)
                                                     if num_participantes == 1:
                                                         st.warning(f" Timeout: Solo 1 participante después de {tiempo_transcurrido}s - Finalizando...")
@@ -3617,7 +3574,7 @@ with tab_op:
                                                     print(f"[DEBUG] No se encontró conferencia activa: {conference_name}")
                                             else:
                                                 print(f"[DEBUG] No hay conference_name en session_state")
-                                                
+
                                         except Exception as e:
                                             print(f"[ERROR] Error verificando participantes de conferencia: {e}")
                                             # Si hay error, aplicar timeout simple como fallback
@@ -3630,7 +3587,7 @@ with tab_op:
                                             except Exception as e2:
                                                 print(f"[ERROR] Error finalizando por timeout: {e2}")
                                                 st.error(f"Error: {e2}")
-                                    
+
                                     # Colgar automáticamente si es máquina
                                     elif es_maquina and not call_ended_by_system:
                                         st.warning(f" Máquina/Buzón detectado: {answered_by} - Finalizando automáticamente...")
@@ -3645,11 +3602,11 @@ with tab_op:
                                         except Exception as e:
                                             print(f"[ERROR] Error finalizando llamada automáticamente: {e}")
                                             st.error(f"Error: {e}")
-                                    
+
                                     # 4. Mostrar botones durante llamada activa
                                     finalizar_manual = False
                                     pausar_grabacion = False
-                                    
+
                                     if not call_ended_by_system:
                                         # Mostrar botones en columnas
                                         btn_col1, btn_col2 = st.columns(2)
@@ -3660,7 +3617,7 @@ with tab_op:
                                                 pausar_grabacion = st.button(" PAUSAR GRABACIÓN")
                                             else:
                                                 st.info(" Grabación pausada")
-                                        
+
                                         # Manejar pausa de grabación
                                         if pausar_grabacion:
                                             try:
@@ -3668,10 +3625,10 @@ with tab_op:
                                                 recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
                                                 if recordings:
                                                     client.recordings(recordings[0].sid).update(status='paused')
-                                                    
+
                                                     # Calcular duración hasta el momento
                                                     dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                                    
+
                                                     # Guardar en Sheet Informe con estado "Grabación Pausada"
                                                     if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.llamada_activa_sid):
                                                         st.session_state.grabacion_pausada = True
@@ -3679,26 +3636,26 @@ with tab_op:
                                                         st.success(" Grabación pausada y guardada en Sheet Informe")
                                                     else:
                                                         st.error("Error guardando en Sheet Informe")
-                                                    
+
                                                     # Usar refresh inteligente para pausar grabación
                                                     refresh_inteligente_llamada(forzar=True)
                                             except Exception as e:
                                                 st.error(f"Error pausando grabación: {e}")
                                     else:
                                         st.warning(f" Llamada terminada automáticamente: {remote.status}")
-                                    
+
                                     # 4. Accion de Finalización (Manual o Automática)
                                     print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
                                     if finalizar_manual or call_ended_by_system:
                                         print(f"[DEBUG] ENTRANDO AL BLOQUE DE FINALIZACIÓN")
-                                        
+
                                         # Marcar que fue finalización manual por el agente
                                         if finalizar_manual:
                                             st.session_state.finalizacion_manual_agente = True
                                             print(f"[DEBUG] Finalización manual por agente marcada")
                                         else:
                                             st.session_state.finalizacion_manual_agente = False
-                                        
+
                                         # Si es finalización manual, colgar la llamada directamente
                                         if finalizar_manual and st.session_state.llamada_activa_sid:
                                             try:
@@ -3707,15 +3664,15 @@ with tab_op:
                                                 print(f"[DEBUG] Llamada Conference colgada manualmente")
                                             except Exception as e:
                                                 print(f"[ERROR] Error colgando llamada Conference: {e}")
-                                        
+
                                         # Obtener datos de la llamada para clasificación
                                         answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
                                         duracion_twilio = int(remote.duration) if remote.duration else 0
                                         error_code = str(remote.error_code) if hasattr(remote, 'error_code') and remote.error_code else None
                                         print(f"[DEBUG] Conference - answered_by: {answered_by}, status: {remote.status}, duration: {duracion_twilio}s, error_code: {error_code}")
-                                        
+
                                         # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS (igual que WebRTC)
-                                        
+
                                         # PRIORIDAD ALTA 1: Si fue finalizada manualmente por el agente (botón "FINALIZAR GESTIÓN")
                                         if st.session_state.get('finalizacion_manual_agente', False):
                                             final_status = 'Gestionada'
@@ -3740,7 +3697,7 @@ with tab_op:
                                             final_status = 'Llamado'  # Asumimos que está en progreso
                                             st.info(f"📞 Llamada en progreso: {remote.status}")
                                             print(f"[DEBUG] Conference - Clasificado como Llamado - Estado intermedio: {remote.status}")
-                                        
+
                                         # Caso 1: No contestó, ocupado, cancelado
                                         elif remote.status in ['no-answer', 'busy', 'canceled']:
                                             final_status = 'No Contesto'
@@ -3759,7 +3716,7 @@ with tab_op:
                                                 final_status = 'No Contesto'
                                                 st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
                                                 print(f"[DEBUG] Conference - Buzón de voz - Tipo: {answered_by}")
-                                        
+
                                         # Caso 3: Contestó persona - Validación de duración
                                         elif answered_by == 'human':
                                             if duracion_twilio >= 300:  # 5 minutos o más
@@ -3768,7 +3725,7 @@ with tab_op:
                                             final_status = 'Llamado'
                                             st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
                                             print(f"[DEBUG] Conference - Detectado como humano - Duración: {duracion_twilio}s")
-                                        
+
                                         # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
                                         elif remote.status == 'completed' and answered_by == 'unknown':
                                             if duracion_twilio == 0:
@@ -3795,19 +3752,19 @@ with tab_op:
                                                 final_status = 'Llamado'
                                                 st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
                                                 print(f"[DEBUG] Conference - Conversación establecida: {duracion_twilio}s")
-                                        
+
                                         # Caso por defecto
                                         else:
                                             final_status = 'Llamado'
                                             print(f"[DEBUG] Conference - Clasificado como Llamado por defecto")
-                                        
+
                                         print(f"[DEBUG] Estado final determinado: {final_status}")
-                                        
+
                                         # Calculamos duración
                                         t_fin = datetime.now()
                                         dur = int((t_fin - st.session_state.t_inicio_dt).total_seconds())
                                         print(f"[DEBUG] Duración calculada: {dur} segundos")
-                                        
+
                                         # --- PASO 1: ACTUALIZACIÓN LOCAL INMEDIATA ---
                                         print(f"[DEBUG] Actualizando DataFrame local para idx={idx}")
                                         st.session_state.df_contactos.at[idx, 'estado'] = final_status  # Mantener Llamado/No Contesto
@@ -3816,24 +3773,24 @@ with tab_op:
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
-                                        
+
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {final_status}")
-                                        
+
                                         # --- PASO 2: SINCRONIZACIÓN CON SHEET INFORME ---
                                         print(f"[DEBUG] Iniciando sincronización con Sheet Informe")
                                         st.write(f" Guardando gestión: {final_status}")
-                                        
+
                                         if URL_SHEET_INFORME:
                                             try:
                                                 st.write("🔄 Sincronizando con Sheet Informe...")
-                                                
+
                                                 # Obtener información adicional de Twilio
                                                 url_grabacion = ''
                                                 precio_llamada = '0'
                                                 duracion_facturada = '0'
                                                 estado_respuesta = answered_by
                                                 codigo_error = ''
-                                                
+
                                                 # Variables adicionales de Twilio para consistencia con WebRTC
                                                 account_sid = ''
                                                 start_time = ''
@@ -3847,15 +3804,15 @@ with tab_op:
                                                 date_created = ''
                                                 parent_call_sid = ''
                                                 phone_number_sid = ''
-                                                
+
                                                 transcription_sid = None
-                                                
+
                                                 try:
                                                     recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
                                                     if recordings:
                                                         recording_sid = recordings[0].sid
                                                         url_grabacion = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
-                                                        
+
                                                         # Solicitar transcripción automáticamente
                                                         st.write("📝 Solicitando transcripción...")
                                                         transcription_sid = solicitar_transcripcion(recording_sid)
@@ -3863,16 +3820,16 @@ with tab_op:
                                                             st.success(f"✅ Transcripción solicitada (SID: {transcription_sid[:8]}...)")
                                                         else:
                                                             st.warning("⚠️ No se pudo solicitar transcripción")
-                                                    
+
                                                     # Obtener TODOS los datos de la llamada de Twilio (como WebRTC)
                                                     if st.session_state.llamada_activa_sid:
                                                         call_data = client.calls(st.session_state.llamada_activa_sid).fetch()
-                                                        
+
                                                         # Datos básicos
                                                         precio_llamada = str(call_data.price) if call_data.price else '0'
                                                         duracion_facturada = str(call_data.duration) if call_data.duration else '0'
                                                         codigo_error = str(call_data.error_code) if hasattr(call_data, 'error_code') and call_data.error_code else ''
-                                                        
+
                                                         # Datos adicionales completos de Twilio
                                                         account_sid = str(call_data.account_sid) if hasattr(call_data, 'account_sid') else ''
                                                         start_time = str(call_data.start_time) if hasattr(call_data, 'start_time') and call_data.start_time else ''
@@ -3886,9 +3843,9 @@ with tab_op:
                                                         date_created = str(call_data.date_created) if hasattr(call_data, 'date_created') and call_data.date_created else ''
                                                         parent_call_sid = str(call_data.parent_call_sid) if hasattr(call_data, 'parent_call_sid') and call_data.parent_call_sid else ''
                                                         phone_number_sid = str(call_data.phone_number_sid) if hasattr(call_data, 'phone_number_sid') and call_data.phone_number_sid else ''
-                                                        
+
                                                         print(f"[DEBUG] Conference - Datos completos obtenidos: duration={duracion_facturada}s, from={from_number}, to={to_number}")
-                                                        
+
                                                 except Exception as e_twilio:
                                                     print(f"[DEBUG] Error obteniendo datos Twilio: {e_twilio}")
 
@@ -3902,7 +3859,7 @@ with tab_op:
                                                     'observacion': [nota],
                                                     'duracion_seg': [dur],
                                                     'fecha_llamada': [t_fin.strftime("%Y-%m-%d %H:%M:%S")],
-                                                    
+
                                                     # Columnas de Twilio Call Recording (completas como WebRTC)
                                                     'call_sid': [st.session_state.llamada_activa_sid or ''],
                                                     'account_sid': [account_sid],
@@ -3938,50 +3895,51 @@ with tab_op:
                                                     else:
                                                         df_informe_actual = st.session_state.df_informe_cache
                                                         print(f"[DEBUG] Usando caché de Informe: {len(df_informe_actual)} registros")
-                                                    
+
                                                     st.write(f"📊 Registros en Informe: {len(df_informe_actual)}")
                                                 except Exception as e_read:
                                                     print(f"[ERROR] Error leyendo Informe: {e_read}")
                                                     df_informe_actual = pd.DataFrame()
-                                                
+
 
                                                 # Agregar nuevo registro
                                                 if df_informe_actual.empty:
                                                     df_informe_actualizado = fila_informe.copy()
                                                 else:
                                                     df_informe_actualizado = pd.concat([df_informe_actual, fila_informe], ignore_index=True)
-                                                
+
 
                                                 # Guardar en Sheet Informe
                                                 if update_sheet(df_informe_actualizado, "0"):
                                                     st.success(f"✅ Guardado en Sheet Informe: {final_status}")
                                                     add_log(f"SYNC_INFORME: {c['nombre']} - {final_status}", "DATA")
-                                                    
+
                                                     if not url_grabacion:
                                                         st.info("📋 Grabación pendiente - Se verificará en 5 minutos")
                                                         print(f"[GRABACION] 📋 Marcada como pendiente en Sheet Informe")
                                                 else:
                                                     st.warning("⚠️ Error guardando en Sheet Informe")
-                                                    
+
                                             except Exception as e_informe:
                                                 st.error(f"❌ Error en Sheet Informe: {e_informe}")
                                                 print(f"[ERROR] Sync Informe: {e_informe}")
-                                        
+
                                         # --- PASO 3: ACTUALIZACIÓN SEGURA DE SHEET LLAMADAS (solo fila específica) ---
                                         print(f"[DEBUG] Conference - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write("🔄 Actualizando estado en Sheet Llamadas...")
-                                                # Usar actualización segura que busca por teléfono y actualiza ambos sheets
-                                                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "CONFERENCE_END", contact_idx=idx):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica por usuario)")
+
+                                                # Usar función segura que actualiza en el sheet compartido de salida
+                                                if update_call_status_safe(st.session_state.df_contactos, idx, final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.llamada_activa_sid or '', URL_SHEET_CONTACTOS):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
                                                     add_log(f"UPDATE_LLAMADAS: {c['nombre']} - {final_status}", "DATA")
                                                 else:
                                                     st.warning("⚠️ Error actualizando Sheet Llamadas")
                                             except Exception as e_llamadas:
                                                 st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
                                                 print(f"[ERROR] Conference Update Llamadas: {e_llamadas}")
-                                        
+
                                         # --- PASO 4: LIMPIEZA DE ESTADO ---
                                         print(f"[DEBUG] Limpiando estado de llamada")
                                         st.write("✅ Gestión completada - Pasando al siguiente contacto...")
@@ -3992,20 +3950,20 @@ with tab_op:
                                         st.session_state.finalizacion_manual_agente = False  # Limpiar variable
                                         time.sleep(2)
                                         st.rerun()
-                                    
+
                                     # Bucle de espera activa
                                     if not call_ended_by_system:
                                         st.write("⏳ Esperando respuesta del cliente...")
                                         time.sleep(2)
                                         st.rerun()
-                                
+
                                 except Exception as e_monitor:
                                     import traceback
                                     error_trace = traceback.format_exc()
                             # --- OPCIÓN DE REPROGRAMAR (SIEMPRE DISPONIBLE) ---
                             st.divider()
                             st.write("**📅 Reprogramar Llamada**")
-                            
+
                             # Sección de programación
                             col_prog1, col_prog2 = st.columns(2)
                             with col_prog1:
@@ -4014,17 +3972,17 @@ with tab_op:
                                 fecha_prog = st.date_input("Fecha:", value=hora_bogota_actual.date(), key=f"fecha_{idx}")
                             with col_prog2:
                                 hora_prog = st.time_input("Hora:", value=hora_bogota_actual.time(), key=f"hora_{idx}")
-                            
+
                             # Mostrar información de zona horaria
                             st.caption(f"🕐 Zona horaria: Bogotá (UTC-5) - Hora actual: {hora_bogota_actual.strftime('%Y-%m-%d %H:%M:%S')}")
-                            
+
                             # Botones de acción
                             col_btn1, col_btn2 = st.columns(2)
                             with col_btn1:
                                 if st.button("💾 Guardar Notas", key=f"save_notes_{idx}", use_container_width=True):
                                     # Obtener nota existente
                                     nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
-                                    
+
                                     # Combinar notas si ya existe algo
                                     if nota_existente and nota_existente.strip():
                                         if nota.strip() and nota != nota_existente:
@@ -4039,10 +3997,10 @@ with tab_op:
                                         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                                         categoria_actual = st.session_state.df_contactos.at[idx, 'estado'] if 'estado' in st.session_state.df_contactos.columns else 'Sin categoría'
                                         nota_acumulada = f"[{timestamp}] ({categoria_actual}) {nota}"  # Primera nota con timestamp y categoría
-                                    
+
                                     # Actualizar DataFrame local con notas acumuladas
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
-                                    
+
                                     # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
@@ -4055,24 +4013,24 @@ with tab_op:
                                             st.error(f"❌ Error acumulando notas: {e}")
                                     else:
                                         st.success("✅ Notas acumuladas localmente")
-                                    
+
                                     time.sleep(1)
                                     st.rerun()
-                            
+
                             with col_btn2:
                                 if st.button("✅ Programar", key=f"prog_{idx}", use_container_width=True):
                                     # Combinar fecha y hora
                                     fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
-                                    
+
                                     # Obtener nota actual (que ya incluye notas acumuladas si se guardaron)
                                     nota_actual = st.session_state.df_contactos.at[idx, 'observacion']
-                                    
+
                                     # Actualizar DataFrame local
                                     st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
                                     st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.strftime("%Y-%m-%d %H:%M:%S")
                                     st.session_state.df_contactos.at[idx, 'observacion'] = nota_actual  # Mantener notas acumuladas
                                     st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
-                                    
+
                                     # Actualizar tanto Sheet compartido como Sheet del agente
                                     if URL_SHEET_CONTACTOS:
                                         try:
