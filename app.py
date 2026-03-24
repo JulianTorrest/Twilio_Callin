@@ -3019,7 +3019,8 @@ with tab_op:
                                             </Dial>
                                         </Response>"""
                                         
-                                        # TwiML para el cliente (con beep de entrada para el agente y manejo de no contestación)
+                                        # TwiML para el cliente (conecta directamente a la conferencia)
+                                        # ✅ CORREGIDO: El cliente ya ve el Caller ID del agente en el from_= de la llamada
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
                                             <Dial>
@@ -3037,12 +3038,12 @@ with tab_op:
                                             </Dial>
                                         </Response>"""
                                         
-                                        # Llamar al agente
+                                        # Llamar al agente (el agente ve el número de Twilio)
                                         call_agente = client.calls.create(
                                             twiml=twiml_agente,
                                             to=st.session_state.numero_celular_agente,
-                                            from_=twilio_number,
-                                            status_callback=f"{function_url_base}/status",
+                                            from_=twilio_number,  # El agente ve el número de Twilio
+                                            status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
@@ -3052,9 +3053,9 @@ with tab_op:
                                         call_cliente = client.calls.create(
                                             twiml=twiml_cliente,
                                             to=tel,
-                                            from_=st.session_state.numero_celular_agente,  # Número del agente (verificado)
+                                            from_=st.session_state.numero_celular_agente,  # ✅ CORREGIDO: El cliente ve el número del agente
                                             machine_detection='Enable',
-                                            status_callback=f"{function_url_base}/status",
+                                            status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
                                         
@@ -3066,7 +3067,9 @@ with tab_op:
                                         print(f"[DEBUG] Conference creada: {conference_name}")
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
-                                        st.success(f"✅ Llamada iniciada - Contestar tu celular primero")
+                                        st.success(f"✅ Llamada iniciada - El cliente verá tu número: {st.session_state.numero_celular_agente}")
+                                        st.info(f"📞 Agente recibe llamada de: {twilio_number}")
+                                        st.info(f"📱 Cliente recibe llamada de: {st.session_state.numero_celular_agente}")
                                         time.sleep(1)
                                         st.rerun()
                                     except Exception as e:
