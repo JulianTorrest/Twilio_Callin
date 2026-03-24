@@ -3111,19 +3111,36 @@ with tab_op:
                                         print(f"[DEBUG] Empieza con +57: {numero_str.startswith('+57')}")
                                         print(f"[DEBUG] Contiene +1: {'+1' in numero_str}")
                                         
-                                        # Detectar problemas de formato que causan +1 57xxx
-                                        if '+1' in numero_str and numero_str.startswith('+57'):
-                                            st.error(f"❌ ERROR CRÍTICO: Número con formato conflictivo: {numero_str}")
-                                            st.error("❌ Contiene +1 y +57 simultáneamente")
-                                            st.error("❌ Esto causa que Twilio muestre +1 57xxx en lugar de 322xxx")
+                                        # 🔥 SOLUCIÓN DEFINITIVA: Limpiar cualquier +1 que pueda causar problemas
+                                        # El problema es que cualquier +1 en el número hace que Twilio lo interprete como número de EE.UU.
+                                        numero_limpio = numero_str
+                                        
+                                        # Remover cualquier +1 que pueda estar causando el problema
+                                        if '+1' in numero_limpio:
+                                            print(f"[DEBUG] Detectado +1 en número, limpiando...")
+                                            numero_limpio = numero_limpio.replace('+1', '')
+                                            # Asegurar que empiece con +57 si es un número colombiano
+                                            if not numero_limpio.startswith('+57') and numero_limpio.startswith('57'):
+                                                numero_limpio = '+' + numero_limpio
+                                            elif not numero_limpio.startswith('+57'):
+                                                # Si no tiene código de país, asumir Colombia
+                                                if len(numero_limpio) == 10 and numero_limpio.startswith('3'):
+                                                    numero_limpio = '+57' + numero_limpio
+                                                
+                                            print(f"[DEBUG] Número limpio: '{numero_limpio}'")
                                             
-                                            # Intentar corregir automáticamente
-                                            numero_corregido = numero_str.replace('+1', '')
-                                            if numero_corregido.startswith('+57'):
-                                                st.warning(f"🔧 Auto-corrección: {numero_str} → {numero_corregido}")
-                                                numero_agente = numero_corregido
-                                                numero_str = numero_corregido
-                                                st.session_state.numero_celular_agente = numero_corregido
+                                            # Actualizar el número en sesión para futuras llamadas
+                                            st.session_state.numero_celular_agente = numero_limpio
+                                            numero_agente = numero_limpio
+                                            numero_str = numero_limpio
+                                            
+                                            st.warning(f"🔧 Número corregido para evitar +1: {numero_agente}")
+                                        
+                                        # Validación final
+                                        if not numero_str.startswith('+57'):
+                                            st.error(f"❌ ERROR: Formato inválido después de limpieza: {numero_str}")
+                                            st.error("❌ Debe empezar con +57 para Colombia")
+                                            st.stop()
                                         
                                         print(f"[DEBUG] Número final para Caller ID: '{numero_str}'")
                                         print(f"[DEBUG] Llamando a cliente: {tel}")
@@ -3132,11 +3149,20 @@ with tab_op:
                                         print(f"[TWILIO_CALL] Parámetros:")
                                         print(f"  - to: {tel}")
                                         print(f"  - from_: {numero_agente}")
+                                        print(f"  - from_ length: {len(str(numero_agente))}")
+                                        print(f"  - from_ starts with +57: {str(numero_agente).startswith('+57')}")
+                                        print(f"  - from_ contains +1: {'+1' in str(numero_agente)}")
+                                        
+                                        # 🔥 VERIFICACIÓN FINAL ANTES DE ENVIAR A TWILIO
+                                        if '+1' in str(numero_agente):
+                                            st.error(f"❌ ERROR CRÍTICO: El número todavía contiene +1: {numero_agente}")
+                                            st.error("❌ Esto causará que el cliente vea +1 57xxx")
+                                            st.stop()
                                         
                                         call_cliente = client.calls.create(
                                             twiml=twiml_cliente,
                                             to=tel,
-                                            from_=numero_agente,  # ✅ CORREGIDO: El cliente ve el número del agente validado
+                                            from_=numero_agente,  # ✅ LIMPIO: Sin +1 que cause problemas
                                             machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
@@ -3186,9 +3212,18 @@ with tab_op:
                                         st.success(f"✅ Conference Call iniciada exitosamente")
                                         st.info(f"📞 Agente: Recibirás llamada de {twilio_number}")
                                         st.info(f"📱 Cliente: Verá tu número {numero_agente}")
+                                        
+                                        # 🔍 VERIFICACIÓN VISUAL PARA EL USUARIO
+                                        if '+1' in str(numero_agente):
+                                            st.error(f"⚠️ ADVERTENCIA: El número configurado todavía contiene +1")
+                                            st.error(f"⚠️ Esto puede causar que el cliente vea: +1 57xxx")
+                                        else:
+                                            st.success(f"✅ Caller ID configurado correctamente: {numero_agente}")
+                                            st.success(f"✅ El cliente verá solo tu número local")
+                                        
                                         st.balloons()  # Celebración exitosa
                                         
-                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG (Simplificado)
+                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG (Detallado para Caller ID)
                                         with st.expander("🔍 Debug Info - Conference Call", expanded=False):
                                             debug_info = f"""
                                             📞 Llamada al Cliente: {tel}
@@ -3197,9 +3232,15 @@ with tab_op:
                                             🆔 SID Agente: {call_agente.sid}
                                             🏷️ Conferencia: {conference_name}
                                             
-                                            ✅ NOTA: El Caller ID se configuró correctamente
-                                            ✅ El cliente verá el número del agente: {numero_agente}
-                                            ✅ El agente recibe llamada de: {twilio_number}
+                                            🔍 ANÁLISIS CALLER ID:
+                                            - Longitud: {len(str(numero_agente))} caracteres
+                                            - Empieza con +57: {str(numero_agente).startswith('+57')}
+                                            - Contiene +1: {'+1' in str(numero_agente)}
+                                            - Formato final: {numero_agente}
+                                            
+                                            ✅ RESULTADO ESPERADO:
+                                            - Cliente verá: {numero_agente.replace('+57', '') if numero_agente.startswith('+57') else numero_agente}
+                                            - Agente verá: {twilio_number}
                                             """
                                             st.code(debug_info)
                                         
