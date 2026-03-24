@@ -4584,6 +4584,11 @@ with tab_op:
                                         # Usar refresh inteligente para programación
                                         refresh_inteligente_llamada(forzar=True)
         else:
-            st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
+            # 🔥 CORRECCIÓN: Solo mostrar felicitaciones si realmente no hay contactos en esa categoría
+            total_en_categoria = len(df[df['estado'] == f_est]) if not df.empty else 0
+            if total_en_categoria == 0:
+                st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
+            else:
+                st.info(f"No hay contactos para mostrar en esta página de {f_est}")
     else:
         st.info("Por favor, cargue un archivo CSV en el sidebar para comenzar la operación.")
