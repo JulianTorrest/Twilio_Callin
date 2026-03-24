@@ -2945,6 +2945,15 @@ with tab_op:
     # Lógica de mapeo de pestaña a estado del DF
     f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
     
+    # 🔥 DEBUG: Verificar datos por categoría
+    print(f"[DEBUG] Categoría seleccionada: {opc} -> Estado: {f_est}")
+    print(f"[DEBUG] Total contactos en df: {len(df)}")
+    if not df.empty:
+        estados_disponibles = df['estado'].value_counts()
+        print(f"[DEBUG] Estados disponibles: {estados_disponibles.to_dict()}")
+        contactos_categoria = len(df[df['estado'] == f_est])
+        print(f"[DEBUG] Contactos en {f_est}: {contactos_categoria}")
+    
     # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
     if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
         # Usar variable de control separada (no modificar st.radio directamente)
@@ -4590,5 +4599,8 @@ with tab_op:
                 st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
             else:
                 st.info(f"No hay contactos para mostrar en esta página de {f_est}")
+    # 🔥 CORRECCIÓN: Este bloque nunca debería ejecutarse si hay datos del Sheet
+    # El mensaje CSV es incorrecto porque usamos Google Sheets, no CSV
     else:
-        st.info("Por favor, cargue un archivo CSV en el sidebar para comenzar la operación.")
+        st.error("⚠️ Error: No se pudieron cargar los contactos del Google Sheet.")
+        st.info("🔄 Intenta recargar la página o verifica la conexión con Google Sheets.")
