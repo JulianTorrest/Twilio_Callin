@@ -2953,6 +2953,18 @@ with tab_op:
         print(f"[DEBUG] Estados disponibles: {estados_disponibles.to_dict()}")
         contactos_categoria = len(df[df['estado'] == f_est])
         print(f"[DEBUG] Contactos en {f_est}: {contactos_categoria}")
+        
+        # 🔥 DEBUG ADICIONAL: Verificar valores exactos
+        estados_unicos = df['estado'].unique()
+        print(f"[DEBUG] Estados únicos en df: {list(estados_unicos)}")
+        print(f"[DEBUG] Buscando estado exacto: '{f_est}'")
+        
+        # Verificar si hay espacios o caracteres extra
+        for estado in estados_unicos:
+            if str(estado).strip() == f_est:
+                print(f"[DEBUG] Coincidencia encontrada (con strip): '{estado}' == '{f_est}'")
+            elif str(estado) == f_est:
+                print(f"[DEBUG] Coincidencia exacta: '{estado}' == '{f_est}'")
     
     # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
     if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
@@ -2973,11 +2985,22 @@ with tab_op:
     search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
     
     # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
+    print(f"[DEBUG] Aplicando filtro para categoría: {opc}")
     if "Gestionadas" in opc:
         # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
         df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
+        print(f"[DEBUG] Filtro Gestionadas aplicado - Resultados: {len(df_work)}")
     else:
-        df_work = df[df['estado'] == f_est]
+        # 🔥 CORRECCIÓN: Normalizar estado para comparación
+        df_work = df[df['estado'].str.strip() == f_est]
+        print(f"[DEBUG] Filtro {f_est} aplicado - Resultados: {len(df_work)}")
+        
+        # Si no hay resultados, intentar sin strip
+        if df_work.empty:
+            df_work = df[df['estado'] == f_est]
+            print(f"[DEBUG] Filtro sin strip - Resultados: {len(df_work)}")
+    
+    print(f"[DEBUG] df_work final tiene {len(df_work)} contactos")
     
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
     if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
