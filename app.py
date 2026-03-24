@@ -3048,16 +3048,61 @@ with tab_op:
                                         )
                                         
                                         # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
-                                        print(f"[DEBUG] Llamando a cliente: {tel} con Caller ID: {st.session_state.numero_celular_agente}")
+                                        
+                                        # 🔍 ANÁLISIS DETALLADO DEL CALLER ID
+                                        numero_agente = st.session_state.numero_celular_agente
+                                        print(f"[DEBUG] Número del agente en sesión: {numero_agente}")
+                                        print(f"[DEBUG] Tipo de dato: {type(numero_agente)}")
+                                        
+                                        # 🔍 VERIFICAR FORMATO Y PROBLEMAS
+                                        numero_str = str(numero_agente).strip()
+                                        print(f"[DEBUG] Número original: '{numero_str}'")
+                                        print(f"[DEBUG] Longitud: {len(numero_str)}")
+                                        print(f"[DEBUG] Empieza con +57: {numero_str.startswith('+57')}")
+                                        print(f"[DEBUG] Contiene +1: {'+1' in numero_str}")
+                                        
+                                        # Detectar problemas de formato que causan +1 57xxx
+                                        if '+1' in numero_str and numero_str.startswith('+57'):
+                                            st.error(f"❌ ERROR CRÍTICO: Número con formato conflictivo: {numero_str}")
+                                            st.error("❌ Contiene +1 y +57 simultáneamente")
+                                            st.error("❌ Esto causa que Twilio muestre +1 57xxx en lugar de 322xxx")
+                                            
+                                            # Intentar corregir automáticamente
+                                            numero_corregido = numero_str.replace('+1', '')
+                                            if numero_corregido.startswith('+57'):
+                                                st.warning(f"🔧 Auto-corrección: {numero_str} → {numero_corregido}")
+                                                numero_agente = numero_corregido
+                                                numero_str = numero_corregido
+                                                st.session_state.numero_celular_agente = numero_corregido
+                                        
+                                        print(f"[DEBUG] Número final para Caller ID: '{numero_str}'")
+                                        print(f"[DEBUG] Llamando a cliente: {tel}")
+                                        
+                                        # 🔍 REGISTRO ANTES DE LA LLAMADA TWILIO
+                                        print(f"[TWILIO_CALL] Parámetros:")
+                                        print(f"  - to: {tel}")
+                                        print(f"  - from_: {numero_agente}")
                                         
                                         call_cliente = client.calls.create(
                                             twiml=twiml_cliente,
                                             to=tel,
-                                            from_=st.session_state.numero_celular_agente,  # ✅ CORREGIDO: El cliente ve el número del agente
+                                            from_=numero_agente,  # ✅ CORREGIDO: El cliente ve el número del agente validado
                                             machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                                         )
+                                        
+                                        # 🔍 VERIFICACIÓN POST-LLAMADA
+                                        print(f"[TWILIO_RESPONSE] Llamada creada con SID: {call_cliente.sid}")
+                                        print(f"[TWILIO_RESPONSE] from_ usado: {call_cliente.from_}")
+                                        print(f"[TWILIO_RESPONSE] to: {call_cliente.to}")
+                                        
+                                        # Alerta si hay discrepancia
+                                        if str(call_cliente.from_) != str(numero_agente):
+                                            st.error(f"⚠️ DISCREPANCIA DETECTADA:")
+                                            st.error(f"⚠️ Esperado: {numero_agente}")
+                                            st.error(f"⚠️ Real: {call_cliente.from_}")
+                                            add_log(f"CALLER_ID_DISCREPANCY - Esperado: {numero_agente} - Real: {call_cliente.from_}", "ERROR")
                                         
                                         # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
                                         st.session_state.llamada_activa_sid = call_cliente.sid
@@ -3067,9 +3112,26 @@ with tab_op:
                                         print(f"[DEBUG] Conference creada: {conference_name}")
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
-                                        st.success(f"✅ Llamada iniciada - El cliente verá tu número: {st.session_state.numero_celular_agente}")
+                                        add_log(f"CALLER_ID_VALIDATION - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
+                                        add_log(f"TWILIO_CALL_DETAILS - from_: {call_cliente.from_} - to: {call_cliente.to}", "DEBUG")
+                                        
+                                        st.success(f"✅ Llamada iniciada - El cliente verá tu número: {numero_agente}")
                                         st.info(f"📞 Agente recibe llamada de: {twilio_number}")
-                                        st.info(f"📱 Cliente recibe llamada de: {st.session_state.numero_celular_agente}")
+                                        st.info(f"📱 Cliente recibe llamada de: {numero_agente}")
+                                        
+                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG
+                                        with st.expander("🔍 Debug Info - Caller ID", expanded=False):
+                                            st.code(f"""
+                                            Número Configurado: {numero_agente}
+                                            Número Twilio Response: {call_cliente.from_}
+                                            Cliente: {tel}
+                                            SID: {call_cliente.sid}
+                                            """)
+                                        
+                                        # 🔍 ADVERTENCIA si se detecta el número problemático
+                                        if "57322870205" in str(numero_agente):
+                                            st.error("⚠️ ALERTA: Se está usando el número 57322870205 que ha causado problemas")
+                                            st.error("⚠️ Verifica la configuración en secrets.toml")
                                         time.sleep(1)
                                         st.rerun()
                                     except Exception as e:
