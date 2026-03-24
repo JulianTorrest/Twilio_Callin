@@ -1740,9 +1740,17 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                     else:
                         no_contesto_dia = 0  # Fallback
                     
-                    # Calcular duración promedio
+                    # 🔥 CORRECCIÓN: Calcular duración promedio con manejo de errores
                     if 'duracion_seg' in dia_informe.columns:
-                        duracion_promedio = dia_informe['duracion_seg'].mean()
+                        try:
+                            # Convertir a numérico, ignorando valores no numéricos
+                            duracion_numeric = pd.to_numeric(dia_informe['duracion_seg'], errors='coerce')
+                            duracion_promedio = duracion_numeric.mean()
+                            if pd.isna(duracion_promedio):
+                                duracion_promedio = 0
+                        except Exception as e:
+                            print(f"[ERROR] Error calculando duración promedio: {e}")
+                            duracion_promedio = 0  # Fallback
                     else:
                         duracion_promedio = 0  # Fallback
                     
@@ -2958,13 +2966,16 @@ with tab_op:
                 # Si el contacto activo no está en el filtrado, agregarlo
                 if idx_activo not in df_work.index:
                     print(f"[DEBUG] Contacto activo {idx_activo} no está en filtro '{f_est}', agregando...")
-                    df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False)
+                    # 🔥 CORRECCIÓN: Crear copia para evitar SettingWithCopyWarning
+                    df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False).copy()
                     
                     # Marcar como contacto activo para identificación visual
                     df_work.loc[idx_activo, 'activo_en_conference'] = True
                     print(f"[DEBUG] Contacto activo agregado al filtrado")
                 else:
                     # Ya está en el filtrado, marcarlo como activo
+                    # 🔥 CORRECCIÓN: Crear copia antes de modificar
+                    df_work = df_work.copy()
                     df_work.loc[idx_activo, 'activo_en_conference'] = True
                     print(f"[DEBUG] Contacto activo ya estaba en filtrado, marcado como activo")
             else:
