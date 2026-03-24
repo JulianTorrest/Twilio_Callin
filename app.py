@@ -4616,14 +4616,10 @@ with tab_op:
                                         # Usar refresh inteligente para programación
                                         refresh_inteligente_llamada(forzar=True)
         else:
-            # 🔥 CORRECCIÓN: Solo mostrar felicitaciones si realmente no hay contactos en esa categoría
+            # 🔥 CORRECCIÓN: Solo manejar casos de categorías específicas sin contactos
+            # NUNCA mostrar errores de Google Sheets aquí
             total_en_categoria = len(df[df['estado'] == f_est]) if not df.empty else 0
             if total_en_categoria == 0:
                 st.success(f"¡Felicidades! No hay más clientes en la categoría: {f_est}")
             else:
                 st.info(f"No hay contactos para mostrar en esta página de {f_est}")
-    # 🔥 CORRECCIÓN: Este bloque nunca debería ejecutarse si hay datos del Sheet
-    # El mensaje CSV es incorrecto porque usamos Google Sheets, no CSV
-    else:
-        st.error("⚠️ Error: No se pudieron cargar los contactos del Google Sheet.")
-        st.info("🔄 Intenta recargar la página o verifica la conexión con Google Sheets.")
