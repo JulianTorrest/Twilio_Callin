@@ -1397,9 +1397,9 @@ def mostrar_dashboard_productividad(metricas):
     else:
         st.error("🔥 ¡Es momento de darlo todo!")
 
-# --- SISTEMA DE BÚSQUEDA AVANZADA ---
+# --- SISTEMA DE BÚSQUEDA AVANZADA MEJORADO ---
 def busqueda_avanzada(df_contactos, query):
-    """Búsqueda predictiva con puntuación de relevancia
+    """Búsqueda predictiva robusta con manejo de casos especiales
     
     Args:
         df_contactos: DataFrame con los contactos
@@ -1412,35 +1412,53 @@ def busqueda_avanzada(df_contactos, query):
         return df_contactos, []
     
     query = query.lower().strip()
+    print(f"[DEBUG] Búsqueda: '{query}' en {len(df_contactos)} contactos")
+    
     resultados = []
     
     for idx, contacto in df_contactos.iterrows():
         puntuacion = 0
         coincidencias = []
         
-        # Búsqueda en nombre (3 puntos)
-        nombre = str(contacto.get('nombre', '')).lower()
+        # 🔥 Búsqueda en nombre (3 puntos) - Manejo robusto
+        nombre = str(contacto.get('nombre', '')).lower().strip()
         if query in nombre:
             puntuacion += 3
             coincidencias.append(f"Nombre: {contacto.get('nombre', '')}")
+            print(f"[DEBUG] Coincidencia en nombre: {contacto.get('nombre', '')}")
         
-        # Búsqueda en teléfono (2 puntos)
-        telefono = str(contacto.get('telefono', '')).replace('+57', '').replace('+', '')
-        if query in telefono:
+        # 🔥 Búsqueda en teléfono (2 puntos) - Limpieza completa
+        telefono_original = str(contacto.get('telefono', ''))
+        telefono_limpio = telefono_original.replace('+57', '').replace('+', '').replace(' ', '').replace('-', '').replace('.', '').strip()
+        query_telefono = query.replace('+57', '').replace('+', '').replace(' ', '').replace('-', '').replace('.', '').strip()
+        
+        if query_telefono in telefono_limpio:
             puntuacion += 2
-            coincidencias.append(f"Teléfono: {contacto.get('telefono', '')}")
+            coincidencias.append(f"Teléfono: {telefono_original}")
+            print(f"[DEBUG] Coincidencia en teléfono: {telefono_original}")
         
-        # Búsqueda en notas/observaciones (1 punto)
-        notas = str(contacto.get('observacion', '')).lower()
+        # 🔥 Búsqueda en notas/observaciones (1 punto) - Manejo NaN
+        notas = str(contacto.get('observacion', '')).lower().strip()
         if query in notas:
             puntuacion += 1
             coincidencias.append("Notas")
+            print(f"[DEBUG] Coincidencia en notas")
         
-        # Búsqueda en estado
-        estado = str(contacto.get('estado', '')).lower()
+        # 🔥 Búsqueda en estado (1 punto)
+        estado = str(contacto.get('estado', '')).lower().strip()
         if query in estado:
             puntuacion += 1
             coincidencias.append(f"Estado: {contacto.get('estado', '')}")
+            print(f"[DEBUG] Coincidencia en estado: {contacto.get('estado', '')}")
+        
+        # 🔥 Búsqueda parcial en nombre (2 puntos)
+        palabras_nombre = nombre.split()
+        for palabra in palabras_nombre:
+            if query in palabra or palabra in query:
+                puntuacion += 2
+                coincidencias.append(f"Parcial: {palabra}")
+                print(f"[DEBUG] Coincidencia parcial en nombre: {palabra}")
+                break
         
         if puntuacion > 0:
             resultados.append({
@@ -1449,9 +1467,12 @@ def busqueda_avanzada(df_contactos, query):
                 'coincidencias': coincidencias,
                 'contacto': contacto
             })
+            print(f"[DEBUG] Resultado encontrado: {contacto.get('nombre', '')} (puntuación: {puntuacion})")
     
     # Ordenar por puntuación (más relevante primero)
     resultados.sort(key=lambda x: x['puntuacion'], reverse=True)
+    
+    print(f"[DEBUG] Total resultados: {len(resultados)}")
     
     if resultados:
         # Crear DataFrame con resultados ordenados
@@ -1459,6 +1480,7 @@ def busqueda_avanzada(df_contactos, query):
         df_resultado = df_contactos.loc[indices_resultado].copy()
         return df_resultado, resultados
     else:
+        print(f"[DEBUG] No se encontraron resultados para '{query}'")
         return pd.DataFrame(), []
 
 def mostrar_feedback_busqueda(resultados, query):
@@ -1471,11 +1493,17 @@ def mostrar_feedback_busqueda(resultados, query):
     if not resultados:
         if query.strip():
             st.info(f"🔍 No se encontraron resultados para '{query}'")
+            st.write("💡 **Sugerencias:**")
+            st.write("   • Intenta con diferentes palabras clave")
+            st.write("   • Verifica la ortografía")
+            st.write("   • Usa solo parte del nombre")
+            st.write("   • Prueba con el número de teléfono sin +57")
         return
     
     total_resultados = len(resultados)
     puntuacion_max = max(r['puntuacion'] for r in resultados)
     
+    # 🔥 FEEDBACK DETALLADO
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c8); padding: 10px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 15px;">
         <strong>🔍 Resultados encontrados:</strong> {total_resultados} contactos para "{query}"<br>
@@ -2913,12 +2941,34 @@ with tab_op:
             # Limpiar el estado de redirección
             del st.session_state.redireccionar_a_programadas
         
-        # Filtrado riguroso
+        # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
         if "Gestionadas" in opc:
             # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
             df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
         else:
             df_work = df[df['estado'] == f_est]
+        
+        # 🔥 SIEMPRE INCLUIR CONTACTO ACTIVO DE CONFERENCE CALL
+        if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+            idx_activo = st.session_state.conference_idx
+            
+            if idx_activo < len(df):
+                contacto_activo = df.iloc[idx_activo]
+                
+                # Si el contacto activo no está en el filtrado, agregarlo
+                if idx_activo not in df_work.index:
+                    print(f"[DEBUG] Contacto activo {idx_activo} no está en filtro '{f_est}', agregando...")
+                    df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False)
+                    
+                    # Marcar como contacto activo para identificación visual
+                    df_work.loc[idx_activo, 'activo_en_conference'] = True
+                    print(f"[DEBUG] Contacto activo agregado al filtrado")
+                else:
+                    # Ya está en el filtrado, marcarlo como activo
+                    df_work.loc[idx_activo, 'activo_en_conference'] = True
+                    print(f"[DEBUG] Contacto activo ya estaba en filtrado, marcado como activo")
+            else:
+                print(f"[WARNING] Índice de contacto activo {idx_activo} inválido")
         
         # Aplicar búsqueda avanzada si hay término de búsqueda
         resultados_busqueda = []
@@ -2961,6 +3011,32 @@ with tab_op:
         fin = inicio + CONTACTOS_POR_PAGINA
         df_work = df_work.iloc[inicio:fin]
 
+        # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
+        if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+            idx_activo = st.session_state.conference_idx
+            
+            if idx_activo < len(st.session_state.df_contactos):
+                contacto_activo = st.session_state.df_contactos.iloc[idx_activo]
+                inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
+                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                        <span style="font-size: 28px; margin-right: 15px;">📞</span>
+                        <strong style="font-size: 18px;">LLAMADA ACTIVA</strong>
+                        <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
+                    </div>
+                    <div style="font-size: 16px;">
+                        <strong>👤 Contacto:</strong> {contacto_activo['nombre']}<br>
+                        <strong>📱 Teléfono:</strong> {contacto_activo['telefono']}<br>
+                        <strong>⏰ Inicio:</strong> {inicio_llamada.strftime('%H:%M:%S')}<br>
+                        <strong>📊 Estado:</strong> {contacto_activo.get('estado', 'Pendiente')}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
+        
         if not df_work.empty:
             # Mostrar TODOS los contactos de la página (hasta 30)
             st.write(f"**Mostrando {len(df_work)} contactos:**")
@@ -2979,9 +3055,23 @@ with tab_op:
                 else:
                     tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
 
+                # 🔥 IDENTIFICACIÓN VISUAL ESPECIAL PARA CONTACTO ACTIVO
+                es_activo = c.get('activo_en_conference', False)
+                icono_activo = "🔴" if es_activo else "📞"
+                titulo_activo = f" {icono_activo} **LLAMANDO** - " if es_activo else f" {icono_activo} "
+                
                 # Crear un expander para cada contacto
-                with st.expander(f"📞 {c['nombre']} - {tel}", expanded=False):
+                with st.expander(f"{titulo_activo}{c['nombre']} - {tel}", expanded=es_activo):
                     col1, col2 = st.columns([2,1])
+                    
+                    # 🔥 INDICADOR VISUAL PARA CONTACTO ACTIVO
+                    if es_activo:
+                        st.markdown("""
+                        <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; text-align: center;">
+                            <strong>🔴 LLAMADA EN CURSO - CONTACTO ACTIVO</strong>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
                     with col1:
                         # Mostrar información de programación si está programada
                         if c['estado'] == 'Programada' and pd.notna(c.get('proxima_llamada')) and c.get('proxima_llamada'):
