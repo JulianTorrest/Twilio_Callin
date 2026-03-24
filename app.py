@@ -1646,12 +1646,26 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
     
     # Preparar datos para análisis
     try:
+        # 🔍 DEBUG: Mostrar columnas disponibles
+        print(f"[DEBUG] Columnas en df_contactos: {list(df_contactos.columns)}")
+        print(f"[DEBUG] Columnas en df_informe: {list(df_informe.columns) if not df_informe.empty else 'DataFrame vacío'}")
+        
         # Datos de contactos
         total_contactos = len(df_contactos)
-        llamados = len(df_contactos[df_contactos['estado'].isin(['Llamado', 'Gestionado'])])
-        pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
-        no_contesto = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
-        programadas = len(df_contactos[df_contactos['estado'] == 'Programada'])
+        
+        # 🔍 CORRECCIÓN: Verificar que exista la columna 'estado'
+        if 'estado' in df_contactos.columns:
+            llamados = len(df_contactos[df_contactos['estado'].isin(['Llamado', 'Gestionado'])])
+            pendientes = len(df_contactos[df_contactos['estado'] == 'Pendiente'])
+            no_contesto = len(df_contactos[df_contactos['estado'] == 'No Contesto'])
+            programadas = len(df_contactos[df_contactos['estado'] == 'Programada'])
+        else:
+            print(f"[WARNING] Columna 'estado' no encontrada en df_contactos")
+            # Fallback: contar todos como pendientes si no hay columna de estado
+            llamados = 0
+            pendientes = total_contactos
+            no_contesto = 0
+            programadas = 0
         
         # Calcular tasa de respuesta
         if (llamados + no_contesto) > 0:
@@ -1683,9 +1697,28 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                     dia_informe = pd.DataFrame()
                 
                 if not dia_informe.empty:
-                    llamadas_dia = dia_informe['llamadas_efectivas'].sum()
-                    no_contesto_dia = dia_informe['no_contesto'].sum()
-                    duracion_promedio = dia_informe['duracion_promedio'].mean()
+                    # 🔍 CORRECCIÓN: Usar columnas reales del sheet de informe
+                    print(f"[DEBUG] Columnas disponibles en dia_informe: {list(dia_informe.columns)}")
+                    
+                    # Contar llamadas efectivas (estado 'Llamado' o 'Gestionado')
+                    if 'estado' in dia_informe.columns:
+                        llamadas_dia = len(dia_informe[dia_informe['estado'].isin(['Llamado', 'Gestionado'])])
+                    else:
+                        llamadas_dia = len(dia_informe)  # Fallback: contar todas las filas
+                    
+                    # Contar no contesto
+                    if 'estado' in dia_informe.columns:
+                        no_contesto_dia = len(dia_informe[dia_informe['estado'] == 'No Contesto'])
+                    else:
+                        no_contesto_dia = 0  # Fallback
+                    
+                    # Calcular duración promedio
+                    if 'duracion_seg' in dia_informe.columns:
+                        duracion_promedio = dia_informe['duracion_seg'].mean()
+                    else:
+                        duracion_promedio = 0  # Fallback
+                    
+                    print(f"[DEBUG] Día {fecha.strftime('%Y-%m-%d')}: {llamadas_dia} llamadas, {no_contesto_dia} no contesto, {duracion_promedio:.1f}s promedio")
                 else:
                     llamadas_dia = 0
                     no_contesto_dia = 0
@@ -2934,6 +2967,11 @@ with tab_op:
             
             # Iterar sobre TODOS los contactos de la página
             for idx in df_work.index:
+                # 🔥 VALIDACIÓN ADICIONAL - Asegurar que el índice sea válido
+                if idx >= len(st.session_state.df_contactos):
+                    print(f"[WARNING] Índice {idx} inválido en df_work, saltando contacto")
+                    continue
+                    
                 c = df_work.loc[idx]
                 # Construir número completo desde CSV (codigo_pais + telefono)
                 if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
@@ -3070,15 +3108,29 @@ with tab_op:
                                             add_log(f"CONFERENCE_ERROR - Sin número de agente", "ERROR")
                                             st.stop()
                                         
-                                        # 🔥 GUARDAR ESTADO CRÍTICO ANTES DE LA LLAMADA
-                                        contacto_backup = {
-                                            'nombre': c['nombre'],
-                                            'telefono': tel,
-                                            'indice': idx,
-                                            'timestamp': datetime.now().isoformat()
-                                        }
-                                        st.session_state.contacto_llamada_actual = contacto_backup
-                                        print(f"[DEBUG] Contacto backup guardado: {contacto_backup}")
+                                        # 🔥 PROTECCIÓN MEJORADA ANTES DE LA LLAMADA
+                                        if not st.session_state.df_contactos.empty and 0 <= idx < len(st.session_state.df_contactos):
+                                            # Guardar estado completo del DataFrame
+                                            st.session_state.df_contactos_backup = st.session_state.df_contactos.copy()
+                                            
+                                            # Guardar contacto específico con más detalles
+                                            contacto_backup = {
+                                                'nombre': c['nombre'],
+                                                'telefono': tel,
+                                                'indice': idx,
+                                                'timestamp': datetime.now().isoformat(),
+                                                'estado_anterior': c.get('estado', 'Pendiente'),
+                                                'datos_completos': c.to_dict() if hasattr(c, 'to_dict') else c
+                                            }
+                                            st.session_state.contacto_llamada_actual = contacto_backup
+                                            
+                                            print(f"[DEBUG] DataFrame backup guardado: {len(st.session_state.df_contactos_backup)} contactos")
+                                            print(f"[DEBUG] Contacto backup guardado: {contacto_backup}")
+                                        else:
+                                            st.error(f"❌ ERROR: Índice inválido o DataFrame vacío")
+                                            st.error(f"❌ Índice: {idx} vs Total: {len(st.session_state.df_contactos)}")
+                                            add_log(f"CONFERENCE_CRITICAL_ERROR - Índice inválido antes de llamada", "ERROR")
+                                            st.stop()
                                         
                                         # Crear conference call: Twilio llama primero al agente, luego al cliente
                                         # El cliente verá el número del agente como Caller ID
@@ -3238,16 +3290,42 @@ with tab_op:
                                         print(f"  - Total contactos: {len(st.session_state.df_contactos)}")
                                         print(f"  - Índice válido: {0 <= st.session_state.conference_idx < len(st.session_state.df_contactos)}")
                                         
-                                        # Validar que el contacto todavía exista
+                                        # 🔥 RECUPERACIÓN AUTOMÁTICA SI EL CONTACTO DESAPARECIÓ
                                         if st.session_state.conference_idx >= len(st.session_state.df_contactos):
-                                            st.error(f"❌ ERROR CRÍTICO: El contacto desapareció después de crear la llamada")
-                                            st.error(f"❌ Índice: {st.session_state.conference_idx} vs Total: {len(st.session_state.df_contactos)}")
-                                            add_log(f"CONFERENCE_CRITICAL_ERROR - Contacto desaparecido post-llamada", "ERROR")
-                                            # Intentar recuperar con el backup
+                                            print(f"[WARNING] Contacto en índice {st.session_state.conference_idx} desapareció después de crear la llamada")
+                                            add_log(f"CONFERENCE_WARNING - Contacto desaparecido post-llamada, intentando recuperar", "WARNING")
+                                            
+                                            # Intentar recuperar del backup
+                                            recuperado = False
                                             if 'contacto_llamada_actual' in st.session_state:
                                                 backup = st.session_state.contacto_llamada_actual
-                                                st.warning(f"🔧 Backup disponible: {backup['nombre']} - {backup['telefono']}")
-                                            st.stop()
+                                                print(f"[DEBUG] Intentando recuperar contacto: {backup['nombre']}")
+                                                
+                                                # Restaurar DataFrame completo si es necesario
+                                                if 'df_contactos_backup' in st.session_state:
+                                                    st.session_state.df_contactos = st.session_state.df_contactos_backup.copy()
+                                                    print(f"[DEBUG] DataFrame restaurado desde backup ({len(st.session_state.df_contactos)} contactos)")
+                                                    
+                                                    # Verificar que el contacto ahora exista
+                                                    if st.session_state.conference_idx < len(st.session_state.df_contactos):
+                                                        print(f"[DEBUG] Contacto recuperado exitosamente")
+                                                        add_log(f"CONFERENCE_RECOVERY - Contacto recuperado exitosamente: {backup['nombre']}", "SUCCESS")
+                                                        recuperado = True
+                                                        st.success(f"✅ Contacto recuperado: {backup['nombre']}")
+                                                    else:
+                                                        print(f"[ERROR] No se pudo recuperar el contacto incluso con backup")
+                                                        add_log(f"CONFERENCE_ERROR - Falló recuperación de contacto", "ERROR")
+                                                        st.error(f"❌ ERROR CRÍTICO: No se pudo recuperar el contacto")
+                                                        st.error(f"❌ Backup disponible: {backup['nombre']} - {backup['telefono']}")
+                                                        st.stop()
+                                                else:
+                                                    print(f"[ERROR] No hay backup de DataFrame disponible")
+                                                    add_log(f"CONFERENCE_ERROR - Sin backup de DataFrame", "ERROR")
+                                            
+                                            if not recuperado:
+                                                st.error(f"❌ ERROR CRÍTICO: El contacto desapareció y no se pudo recuperar")
+                                                st.error(f"❌ Índice: {st.session_state.conference_idx} vs Total: {len(st.session_state.df_contactos)}")
+                                                st.stop()
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
                                         add_log(f"CALLER_ID_CONFIGURED - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
