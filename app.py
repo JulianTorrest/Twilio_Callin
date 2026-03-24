@@ -1849,7 +1849,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             hovertemplate='<b>%{fullData.name}</b><br>Día: %{x}<br>Llamadas: %{y}<extra></extra>'
         )
         
-        st.plotly_chart(fig_tendencias, use_container_width=True)
+        st.plotly_chart(fig_tendencias, width='stretch')
         
         # Gráfico de Tasa de Respuesta
         st.markdown("#### 📈 Tasa de Respuesta Semanal")
@@ -1873,7 +1873,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
             hovertemplate='<b>Día: %{x}</b><br>Tasa Respuesta: %{y:.1f}%<extra></extra>'
         )
         
-        st.plotly_chart(fig_respuesta, use_container_width=True)
+        st.plotly_chart(fig_respuesta, width='stretch')
         
         # Insights y Recomendaciones Personalizadas
         st.markdown("#### 🎯 Insights y Recomendaciones Personalizadas")
@@ -2003,7 +2003,7 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         df_mostrar['Tasa Respuesta (%)'] = df_mostrar['Tasa Respuesta (%)'].round(1)
         df_mostrar['Duración Promedio (s)'] = df_mostrar['Duración Promedio (s)'].round(0).astype(int)
         
-        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        st.dataframe(df_mostrar, width='stretch', hide_index=True)
         
         # Footer del reporte
         st.markdown(f"""
@@ -2554,7 +2554,7 @@ with tab_met:
                 m1.metric("Total Gestionados", len(df_agente))
                 m2.metric("Efectividad", f"{(len(df_agente[df_agente['estado']=='Llamado'])/len(df_agente)*100):.1f}%")
                 m3.metric("Promedio Duración", f"{pd.to_numeric(df_agente['duracion_seg'], errors='coerce').mean():.1f}s")
-                st.plotly_chart(px.pie(df_agente, names='estado', title="Distribución de Estados"), use_container_width=True)
+                st.plotly_chart(px.pie(df_agente, names='estado', title="Distribución de Estados"), width='stretch')
             else:
                 st.info(f"No hay registros en el Sheet para el agente {st.session_state.agente_id}.")
         else:
@@ -2582,8 +2582,8 @@ with tab_sup:
         if not df_historico.empty:
             st.write("Resumen por Agente Humano:")
             resumen_sup = df_historico.groupby(['agente_id', 'estado']).size().unstack(fill_value=0)
-            st.dataframe(resumen_sup, use_container_width=True)
-            st.plotly_chart(px.bar(df_historico, x='agente_id', color='estado', title="Productividad por Cédula"), use_container_width=True)
+            st.dataframe(resumen_sup, width='stretch')
+            st.plotly_chart(px.bar(df_historico, x='agente_id', color='estado', title="Productividad por Cédula"), width='stretch')
     else:
         st.error("Acceso restringido a Supervisores.")
 
@@ -3174,7 +3174,7 @@ with tab_op:
                             
                             if not llamada_activa:
                                 # Botón único de llamada con Conference Call (ACTIVO)
-                                if st.button("📞 LLAMAR (Conference Call)", type="primary", use_container_width=True, key=f"call_{idx}"):
+                                if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
                                     try:
                                         # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
                                         print(f"[DEBUG] Botón Conference Call presionado - idx: {idx}")
@@ -3569,7 +3569,7 @@ with tab_op:
                                 #         st.error(f"Error al iniciar llamada: {e}")
                                 
                                 # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
-                                if st.button("🎧 LLAMAR (WebRTC)", use_container_width=True, key=f"call_webrtc_{idx}"):
+                                if st.button("🎧 LLAMAR (WebRTC)", width='stretch', key=f"call_webrtc_{idx}"):
                                     # Marcar WebRTC como activo y guardar datos
                                     st.session_state.webrtc_activo = True
                                     st.session_state.webrtc_numero = tel
@@ -4493,7 +4493,7 @@ with tab_op:
                             # Botones de acción
                             col_btn1, col_btn2 = st.columns(2)
                             with col_btn1:
-                                if st.button("💾 Guardar Notas", key=f"save_notes_{idx}", use_container_width=True):
+                                if st.button("💾 Guardar Notas", key=f"save_notes_{idx}", width='stretch'):
                                     # Obtener nota existente
                                     nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
                                     
@@ -4532,7 +4532,7 @@ with tab_op:
                                     st.rerun()
                             
                             with col_btn2:
-                                if st.button("✅ Programar", key=f"prog_{idx}", use_container_width=True):
+                                if st.button("✅ Programar", key=f"prog_{idx}", width='stretch'):
                                     # Combinar fecha y hora
                                     fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
                                     
