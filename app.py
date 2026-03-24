@@ -685,7 +685,7 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         rate_limiter.check_and_wait(operation_type="write")
         
         # Obtener datos del contacto específico
-        contact_data = df_contactos.iloc[idx]
+        contact_data = df_contactos.loc[idx]
         telefono = str(contact_data.get('telefono', ''))
         
         if not telefono:
@@ -1592,13 +1592,25 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
         # Datos históricos si hay informe
         datos_semanales = []
         if df_informe is not None and not df_informe.empty:
+            # Preprocesar fechas para filtrado eficiente
+            if 'fecha_llamada' in df_informe.columns:
+                df_informe['fecha_dt'] = pd.to_datetime(df_informe['fecha_llamada'], errors='coerce')
+            
             # Últimos 7 días
             for i in range(7):
                 fecha = ahora - timedelta(days=i)
                 dia_semana = fecha.strftime('%A')
                 
                 # Filtrar datos del día
-                dia_informe = df_informe[df_informe['fecha'] == fecha.strftime('%Y-%m-%d')]
+                if 'fecha_dt' in df_informe.columns:
+                    dia_informe = df_informe[df_informe['fecha_dt'].dt.date == fecha.date()]
+                elif 'fecha' in df_informe.columns:
+                    try:
+                        dia_informe = df_informe[df_informe['fecha'] == fecha.strftime('%Y-%m-%d')]
+                    except KeyError:
+                        dia_informe = pd.DataFrame()
+                else:
+                    dia_informe = pd.DataFrame()
                 
                 if not dia_informe.empty:
                     llamadas_dia = dia_informe['llamadas_efectivas'].sum()
@@ -3480,10 +3492,9 @@ with tab_op:
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write(" Actualizando estado en Sheet Llamadas...")
-                                                
-                                                # Usar función segura que actualiza en el sheet compartido de salida
-                                                if update_call_status_safe(st.session_state.df_contactos, idx, webrtc_final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.webrtc_call_sid or '', URL_SHEET_CONTACTOS):
-                                                    st.success(" Estado actualizado en Sheet Llamadas (fila específica)")
+                                                # Usar actualización segura que busca por teléfono y actualiza ambos sheets
+                                                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "WEBRTC_END", contact_idx=idx):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
                                                     add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
                                                 else:
                                                     st.warning(" Error actualizando Sheet Llamadas")
@@ -3929,10 +3940,9 @@ with tab_op:
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write("🔄 Actualizando estado en Sheet Llamadas...")
-                                                
-                                                # Usar función segura que actualiza en el sheet compartido de salida
-                                                if update_call_status_safe(st.session_state.df_contactos, idx, final_status, nota, dur, st.session_state.agente_id, t_fin.strftime("%Y-%m-%d %H:%M:%S"), st.session_state.llamada_activa_sid or '', URL_SHEET_CONTACTOS):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
+                                                # Usar actualización segura que busca por teléfono y actualiza ambos sheets
+                                                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "CONFERENCE_END", contact_idx=idx):
+                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica por usuario)")
                                                     add_log(f"UPDATE_LLAMADAS: {c['nombre']} - {final_status}", "DATA")
                                                 else:
                                                     st.warning("⚠️ Error actualizando Sheet Llamadas")
