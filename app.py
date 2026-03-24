@@ -2911,180 +2911,192 @@ with tab_op:
     # Verificar grabaciones pendientes en segundo plano
     verificar_grabaciones_pendientes()
     
-    if st.session_state.df_contactos is not None:
+    # 🔥 CORRECCIÓN: Validación robusta de df_contactos
+    if st.session_state.df_contactos is not None and not st.session_state.df_contactos.empty:
         df = st.session_state.df_contactos
+    else:
+        df = pd.DataFrame()  # DataFrame vacío como fallback
         
-        # --- SISTEMA DE NOTIFICACIONES INTELIGENTES ---
-        # Calcular métricas para notificaciones contextuales
-        try:
-            df_informe = read_sheet("0") if URL_SHEET_INFORME else pd.DataFrame()
-        except:
-            df_informe = pd.DataFrame()
+        # 🔥 MANEJO DE ESTADO LIMPIO CUANDO df ESTÁ VACÍO
+        st.warning("⚠️ No hay contactos cargados. Intenta recargar la página.")
         
-        metricas = calcular_metricas_productividad(df, df_informe)
-        notificaciones = analizar_notificaciones_contextuales(df, metricas)
-        
-        if notificaciones:
-            mostrar_notificaciones_inteligentes(notificaciones)
-        
-        # --- BÚSQUEDA AVANZADA ---
-        st.markdown("### 🔍 Búsqueda Avanzada")
-        search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
-        
-        opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True, key="pestana_opciones")
-        # Lógica de mapeo de pestaña a estado del DF
-        f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
-        
-        # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
-        if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
-            # Usar variable de control separada (no modificar st.radio directamente)
-            st.session_state.redireccionar_a_programadas = True
-            # Limpiar el estado de redirección
-            del st.session_state.pestana_actual
-        
-        # 🔥 APLICAR REDIRECCIÓN SI ES NECESARIO
-        if hasattr(st.session_state, 'redireccionar_a_programadas') and st.session_state.redireccionar_a_programadas:
-            # Forzar la pestaña "Programadas" usando la lógica de mapeo
-            f_est = "Programada"
-            # Limpiar el estado de redirección
-            del st.session_state.redireccionar_a_programadas
-        
-        # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
-        if "Gestionadas" in opc:
-            # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
-            df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
-        else:
-            df_work = df[df['estado'] == f_est]
-        
-        # 🔥 SIEMPRE INCLUIR CONTACTO ACTIVO DE CONFERENCE CALL
-        if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
-            idx_activo = st.session_state.conference_idx
+        # Limpiar estado de llamada si hay datos inconsistentes
+        if 'conference_idx' in st.session_state or 'llamada_activa_sid' in st.session_state:
+            print(f"[DEBUG] Limpiando estado de llamada debido a df vacío")
+            if 'conference_idx' in st.session_state:
+                del st.session_state.conference_idx
+            if 'llamada_activa_sid' in st.session_state:
+                del st.session_state.llamada_activa_sid
+            if 'conference_name' in st.session_state:
+                del st.session_state.conference_name
+            if 't_inicio_dt' in st.session_state:
+                del st.session_state.t_inicio_dt
             
-            if idx_activo < len(df):
-                contacto_activo = df.iloc[idx_activo]
+            st.info("🔄 Estado de llamada limpiado. Por favor, recarga la página.")
+            
+        # Botón para recargar
+        if st.button("🔄 Recargar Contactos", key="reload_contacts"):
+            st.rerun()
+            
+        st.stop()  # Detener ejecución si no hay contactos
+    
+    # 🔥 LÓGICA DE MAPEO DE PESTAÑA A ESTADO DEL DF (solo si hay contactos)
+    opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True, key="pestana_opciones")
+    # Lógica de mapeo de pestaña a estado del DF
+    f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
+    
+    # 🔥 REDIRECCIÓN AUTOMÁTICA A "PROGRAMADAS" SI SE PROGRAMÓ UNA LLAMADA
+    if hasattr(st.session_state, 'pestana_actual') and st.session_state.pestana_actual == "Programadas":
+        # Usar variable de control separada (no modificar st.radio directamente)
+        st.session_state.redireccionar_a_programadas = True
+        # Limpiar el estado de redirección
+        del st.session_state.pestana_actual
+    
+    # 🔥 APLICAR REDIRECCIÓN SI ES NECESARIO
+    if hasattr(st.session_state, 'redireccionar_a_programadas') and st.session_state.redireccionar_a_programadas:
+        # Forzar la pestaña "Programadas" usando la lógica de mapeo
+        f_est = "Programada"
+        # Limpiar el estado de redirección
+        del st.session_state.redireccionar_a_programadas
+    
+    # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
+    if "Gestionadas" in opc:
+        # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
+        df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
+    else:
+        df_work = df[df['estado'] == f_est]
+    
+    # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
+    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+        idx_activo = st.session_state.conference_idx
+        
+        # 🔥 CORRECCIÓN: Validar que df no sea None ni esté vacío
+        if df is not None and not df.empty and idx_activo < len(df):
+            contacto_activo = df.iloc[idx_activo]
+            
+            # Si el contacto activo no está en el filtrado, agregarlo
+            if idx_activo not in df_work.index:
+                print(f"[DEBUG] Contacto activo {idx_activo} no está en filtro '{f_est}', agregando...")
+                # 🔥 CORRECCIÓN: Crear copia para evitar SettingWithCopyWarning
+                df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False).copy()
                 
-                # Si el contacto activo no está en el filtrado, agregarlo
-                if idx_activo not in df_work.index:
-                    print(f"[DEBUG] Contacto activo {idx_activo} no está en filtro '{f_est}', agregando...")
-                    # 🔥 CORRECCIÓN: Crear copia para evitar SettingWithCopyWarning
-                    df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False).copy()
-                    
-                    # Marcar como contacto activo para identificación visual
-                    df_work.loc[idx_activo, 'activo_en_conference'] = True
-                    print(f"[DEBUG] Contacto activo agregado al filtrado")
-                else:
-                    # Ya está en el filtrado, marcarlo como activo
-                    # 🔥 CORRECCIÓN: Crear copia antes de modificar
-                    df_work = df_work.copy()
-                    df_work.loc[idx_activo, 'activo_en_conference'] = True
-                    print(f"[DEBUG] Contacto activo ya estaba en filtrado, marcado como activo")
+                # Marcar como contacto activo para identificación visual
+                df_work.loc[idx_activo, 'activo_en_conference'] = True
+                print(f"[DEBUG] Contacto activo agregado al filtrado")
             else:
-                print(f"[WARNING] Índice de contacto activo {idx_activo} inválido")
+                # Ya está en el filtrado, marcarlo como activo
+                # 🔥 CORRECCIÓN: Crear copia antes de modificar
+                df_work = df_work.copy()
+                df_work.loc[idx_activo, 'activo_en_conference'] = True
+                print(f"[DEBUG] Contacto activo ya estaba en filtrado, marcado como activo")
+        else:
+            print(f"[WARNING] Índice de contacto activo {idx_activo} inválido")
+    
+    # Aplicar búsqueda avanzada si hay término de búsqueda
+    resultados_busqueda = []
+    if search:
+        df_work, resultados_busqueda = busqueda_avanzada(df_work, search)
+        mostrar_feedback_busqueda(resultados_busqueda, search)
+    
+    # Paginación: 30 contactos por página
+    CONTACTOS_POR_PAGINA = 30
+    total_contactos = len(df_work)
+    total_paginas = (total_contactos - 1) // CONTACTOS_POR_PAGINA + 1 if total_contactos > 0 else 1
+    
+    # Resetear página si cambia el filtro
+    if 'ultimo_filtro' not in st.session_state:
+        st.session_state.ultimo_filtro = f_est
+    if st.session_state.ultimo_filtro != f_est:
+        st.session_state.pagina_actual = 0
+        st.session_state.ultimo_filtro = f_est
+    
+    # Asegurar que la página actual esté en rango
+    if st.session_state.pagina_actual >= total_paginas:
+        st.session_state.pagina_actual = max(0, total_paginas - 1)
+    
+    # Mostrar controles de paginación si hay más de 30 contactos
+    if total_contactos > CONTACTOS_POR_PAGINA:
+        col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
+        with col_pag1:
+            if st.button("⬅️ Anterior", disabled=st.session_state.pagina_actual == 0):
+                st.session_state.pagina_actual -= 1
+                st.rerun()
+        with col_pag2:
+            st.write(f"**Página {st.session_state.pagina_actual + 1} de {total_paginas}** ({total_contactos} contactos)")
+        with col_pag3:
+            if st.button("Siguiente ➡️", disabled=st.session_state.pagina_actual >= total_paginas - 1):
+                st.session_state.pagina_actual += 1
+                st.rerun()
         
-        # Aplicar búsqueda avanzada si hay término de búsqueda
-        resultados_busqueda = []
-        if search:
-            df_work, resultados_busqueda = busqueda_avanzada(df_work, search)
-            mostrar_feedback_busqueda(resultados_busqueda, search)
-        
-        # Paginación: 30 contactos por página
-        CONTACTOS_POR_PAGINA = 30
-        total_contactos = len(df_work)
-        total_paginas = (total_contactos - 1) // CONTACTOS_POR_PAGINA + 1 if total_contactos > 0 else 1
-        
-        # Resetear página si cambia el filtro
-        if 'ultimo_filtro' not in st.session_state:
-            st.session_state.ultimo_filtro = f_est
-        if st.session_state.ultimo_filtro != f_est:
-            st.session_state.pagina_actual = 0
-            st.session_state.ultimo_filtro = f_est
-        
-        # Asegurar que la página actual esté en rango
-        if st.session_state.pagina_actual >= total_paginas:
-            st.session_state.pagina_actual = max(0, total_paginas - 1)
-        
-        # Mostrar controles de paginación si hay más de 30 contactos
-        if total_contactos > CONTACTOS_POR_PAGINA:
-            col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
-            with col_pag1:
-                if st.button("⬅️ Anterior", disabled=st.session_state.pagina_actual == 0):
-                    st.session_state.pagina_actual -= 1
-                    st.rerun()
-            with col_pag2:
-                st.write(f"**Página {st.session_state.pagina_actual + 1} de {total_paginas}** ({total_contactos} contactos)")
-            with col_pag3:
-                if st.button("Siguiente ➡️", disabled=st.session_state.pagina_actual >= total_paginas - 1):
-                    st.session_state.pagina_actual += 1
-                    st.rerun()
-        
-        # Obtener contactos de la página actual
-        inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
-        fin = inicio + CONTACTOS_POR_PAGINA
-        df_work = df_work.iloc[inicio:fin]
+    # Obtener contactos de la página actual
+    inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
+    fin = inicio + CONTACTOS_POR_PAGINA
+    df_work = df_work.iloc[inicio:fin]
 
-        # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
-        if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
-            idx_activo = st.session_state.conference_idx
+    # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
+    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+        idx_activo = st.session_state.conference_idx
+        
+        # 🔥 CORRECCIÓN: Validar que df no sea None ni esté vacío
+        if df is not None and not df.empty and idx_activo < len(df):
+            contacto_activo = df.iloc[idx_activo]
+            inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
             
-            if idx_activo < len(st.session_state.df_contactos):
-                contacto_activo = st.session_state.df_contactos.iloc[idx_activo]
-                inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
-                
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
-                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                        <span style="font-size: 28px; margin-right: 15px;">📞</span>
-                        <strong style="font-size: 18px;">LLAMADA ACTIVA</strong>
-                        <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
-                    </div>
-                    <div style="font-size: 16px;">
-                        <strong>👤 Contacto:</strong> {contacto_activo['nombre']}<br>
-                        <strong>📱 Teléfono:</strong> {contacto_activo['telefono']}<br>
-                        <strong>⏰ Inicio:</strong> {inicio_llamada.strftime('%H:%M:%S')}<br>
-                        <strong>📊 Estado:</strong> {contacto_activo.get('estado', 'Pendiente')}
-                    </div>
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
+                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 28px; margin-right: 15px;">📞</span>
+                    <strong style="font-size: 18px;">LLAMADA ACTIVA</strong>
+                    <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
-        
-        if not df_work.empty:
-            # Mostrar TODOS los contactos de la página (hasta 30)
-            st.write(f"**Mostrando {len(df_work)} contactos:**")
+                <div style="font-size: 16px;">
+                    <strong>👤 Contacto:</strong> {contacto_activo['nombre']}<br>
+                    <strong>📱 Teléfono:</strong> {contacto_activo['telefono']}<br>
+                    <strong>⏰ Inicio:</strong> {inicio_llamada.strftime('%H:%M:%S')}<br>
+                    <strong>📊 Estado:</strong> {contacto_activo.get('estado', 'Pendiente')}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # Iterar sobre TODOS los contactos de la página
-            for idx in df_work.index:
-                # 🔥 VALIDACIÓN ADICIONAL - Asegurar que el índice sea válido
-                if idx >= len(st.session_state.df_contactos):
-                    print(f"[WARNING] Índice {idx} inválido en df_work, saltando contacto")
-                    continue
-                    
-                c = df_work.loc[idx]
-                # Construir número completo desde CSV (codigo_pais + telefono)
-                if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
-                    tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
-                else:
-                    tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
-
-                # 🔥 IDENTIFICACIÓN VISUAL ESPECIAL PARA CONTACTO ACTIVO
-                # 🔥 CORRECCIÓN: Asegurar que es_activo sea booleano, no float
-                es_activo = bool(c.get('activo_en_conference', False))
-                icono_activo = "🔴" if es_activo else "📞"
-                titulo_activo = f" {icono_activo} **LLAMANDO** - " if es_activo else f" {icono_activo} "
+            print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
+    
+    if not df_work.empty:
+        # Mostrar TODOS los contactos de la página (hasta 30)
+        st.write(f"**Mostrando {len(df_work)} contactos:**")
+            
+        # Iterar sobre TODOS los contactos de la página
+        for idx in df_work.index:
+            # 🔥 VALIDACIÓN ADICIONAL - Asegurar que el índice sea válido
+            if idx >= len(st.session_state.df_contactos):
+                print(f"[WARNING] Índice {idx} inválido en df_work, saltando contacto")
+                continue
                 
-                # 🔥 CORRECCIÓN: Convertir es_activo a int para expanded parameter
-                with st.expander(f"{titulo_activo}{c['nombre']} - {tel}", expanded=bool(es_activo)):
-                    col1, col2 = st.columns([2,1])
-                    
-                    # 🔥 INDICADOR VISUAL PARA CONTACTO ACTIVO
-                    if es_activo:
-                        st.markdown("""
-                        <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; text-align: center;">
-                            <strong>🔴 LLAMADA EN CURSO - CONTACTO ACTIVO</strong>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col1:
+            c = df_work.loc[idx]
+            # Construir número completo desde CSV (codigo_pais + telefono)
+            if 'codigo_pais' in c.index and pd.notna(c['codigo_pais']):
+                tel = f"+{str(c['codigo_pais']).replace('+', '')}{str(c['telefono'])}"
+            else:
+                tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
+
+            # 🔥 IDENTIFICACIÓN VISUAL ESPECIAL PARA CONTACTO ACTIVO
+            # 🔥 CORRECCIÓN: Asegurar que es_activo sea booleano, no float
+            es_activo = bool(c.get('activo_en_conference', False))
+            icono_activo = "🔴" if es_activo else "📞"
+            titulo_activo = f" {icono_activo} **LLAMANDO** - " if es_activo else f" {icono_activo} "
+            
+            # 🔥 CORRECCIÓN: Convertir es_activo a int para expanded parameter
+            with st.expander(f"{titulo_activo}{c['nombre']} - {tel}", expanded=bool(es_activo)):
+                col1, col2 = st.columns([2,1])
+                
+                # 🔥 INDICADOR VISUAL PARA CONTACTO ACTIVO
+                if es_activo:
+                    st.markdown("""
+                    <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 10px; border-radius: 8px; margin-bottom: 10px; text-align: center;">
+                        <strong>🔴 LLAMADA EN CURSO - CONTACTO ACTIVO</strong>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col1:
                         # Mostrar información de programación si está programada
                         if c['estado'] == 'Programada' and pd.notna(c.get('proxima_llamada')) and c.get('proxima_llamada'):
                             try:
@@ -3168,34 +3180,34 @@ with tab_op:
                                 # Forzar refresh para mostrar el historial actualizado
                                 refresh_inteligente_llamada(forzar=True)
 
-                    with col2:
-                        if not st.session_state.en_pausa:
-                            # Verificar si hay llamada activa (Conference o WebRTC)
-                            llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
-                            
-                            if not llamada_activa:
-                                # Botón único de llamada con Conference Call (ACTIVO)
-                                if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
-                                    try:
-                                        # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
-                                        print(f"[DEBUG] Botón Conference Call presionado - idx: {idx}")
-                                        print(f"[DEBUG] Contacto actual: {c['nombre']} - {tel}")
-                                        print(f"[DEBUG] Total contactos en sesión: {len(st.session_state.df_contactos)}")
-                                        print(f"[DEBUG] Índice válido: {0 <= idx < len(st.session_state.df_contactos)}")
-                                        
-                                        # Validar que el índice sea válido
-                                        if idx >= len(st.session_state.df_contactos) or idx < 0:
-                                            st.error(f"❌ ERROR: Índice inválido ({idx}) para el contacto")
-                                            st.error(f"❌ Total contactos disponibles: {len(st.session_state.df_contactos)}")
-                                            add_log(f"CONFERENCE_ERROR - Índice inválido: {idx}", "ERROR")
-                                            st.stop()
-                                        
-                                        # Validar que el contacto exista y tenga datos
-                                        if 'nombre' not in c or 'telefono' not in c:
-                                            st.error(f"❌ ERROR: Contacto incompleto")
-                                            st.error(f"❌ Datos: {c}")
-                                            add_log(f"CONFERENCE_ERROR - Contacto incompleto: {c}", "ERROR")
-                                            st.stop()
+                with col2:
+                    if not st.session_state.en_pausa:
+                        # Verificar si hay llamada activa (Conference o WebRTC)
+                        llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
+                        
+                        if not llamada_activa:
+                            # Botón único de llamada con Conference Call (ACTIVO)
+                            if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
+                                try:
+                                    # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
+                                    print(f"[DEBUG] Botón Conference Call presionado - idx: {idx}")
+                                    print(f"[DEBUG] Contacto actual: {c['nombre']} - {tel}")
+                                    print(f"[DEBUG] Total contactos en sesión: {len(st.session_state.df_contactos)}")
+                                    print(f"[DEBUG] Índice válido: {0 <= idx < len(st.session_state.df_contactos)}")
+                                    
+                                    # Validar que el índice sea válido
+                                    if idx >= len(st.session_state.df_contactos) or idx < 0:
+                                        st.error(f"❌ ERROR: Índice inválido ({idx}) para el contacto")
+                                        st.error(f"❌ Total contactos disponibles: {len(st.session_state.df_contactos)}")
+                                        add_log(f"CONFERENCE_ERROR - Índice inválido: {idx}", "ERROR")
+                                        st.stop()
+                                    
+                                    # Validar que el contacto exista y tenga datos
+                                    if 'nombre' not in c or 'telefono' not in c:
+                                        st.error(f"❌ ERROR: Contacto incompleto")
+                                        st.error(f"❌ Datos: {c}")
+                                        add_log(f"CONFERENCE_ERROR - Contacto incompleto: {c}", "ERROR")
+                                        st.stop()
                                         
                                         # Validar que no haya llamada activa
                                         if st.session_state.llamada_activa_sid is not None:
@@ -3515,39 +3527,39 @@ with tab_op:
                                             st.error("⚠️ Verifica la configuración en secrets.toml")
                                         time.sleep(1)
                                         st.rerun()
-                                    except Exception as e:
-                                        st.error(f"❌ Error al iniciar llamada: {e}")
-                                        print(f"[ERROR] Error en conference call: {e}")
-                                        import traceback
-                                        print(traceback.format_exc())
-                                        
-                                        # 🔥 RECUPERACIÓN DE ESTADO EN CASO DE ERROR
-                                        add_log(f"CONFERENCE_CALL_ERROR - {e}", "ERROR")
-                                        
-                                        # Limpiar estado parcial si algo falló
-                                        if 'llamada_activa_sid' in st.session_state and st.session_state.llamada_activa_sid:
-                                            try:
-                                                # Intentar colgar la llamada si se inició parcialmente
-                                                client.calls(st.session_state.llamada_activa_sid).update(status='completed')
-                                                print(f"[DEBUG] Llamada parcial colgada por error")
-                                            except:
-                                                pass
-                                            finally:
-                                                st.session_state.llamada_activa_sid = None
-                                                st.session_state.conference_idx = None
-                                                st.session_state.conference_name = None
-                                                
-                                        st.warning("🔄 Estado limpiado. Intenta nuevamente.")
-                                        
-                                        # Mostrar información de depuración
-                                        with st.expander("🔍 Debug Info - Error", expanded=True):
-                                            st.code(f"""
-                                            Error: {e}
-                                            Contacto: {c.get('nombre', 'N/A')} - {tel}
-                                            Índice: {idx}
-                                            Total contactos: {len(st.session_state.df_contactos)}
-                                            Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                                            """)
+                                except Exception as e:
+                                    st.error(f"❌ Error al iniciar llamada: {e}")
+                                    print(f"[ERROR] Error en conference call: {e}")
+                                    import traceback
+                                    print(traceback.format_exc())
+                                    
+                                    # 🔥 RECUPERACIÓN DE ESTADO EN CASO DE ERROR
+                                    add_log(f"CONFERENCE_CALL_ERROR - {e}", "ERROR")
+                                    
+                                    # Limpiar estado parcial si algo falló
+                                    if 'llamada_activa_sid' in st.session_state and st.session_state.llamada_activa_sid:
+                                        try:
+                                            # Intentar colgar la llamada si se inició parcialmente
+                                            client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                            print(f"[DEBUG] Llamada parcial colgada por error")
+                                        except:
+                                            pass
+                                        finally:
+                                            st.session_state.llamada_activa_sid = None
+                                            st.session_state.conference_idx = None
+                                            st.session_state.conference_name = None
+                                    
+                                    st.warning("🔄 Estado limpiado. Intenta nuevamente.")
+                                    
+                                    # Mostrar información de depuración
+                                    with st.expander("🔍 Debug Info - Error", expanded=True):
+                                        st.code(f"""
+                                        Error: {e}
+                                        Contacto: {c.get('nombre', 'N/A')} - {tel}
+                                        Índice: {idx}
+                                        Total contactos: {len(st.session_state.df_contactos)}
+                                        Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                        """)
                                 # ============================================================
                                 # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
                                 # ============================================================
