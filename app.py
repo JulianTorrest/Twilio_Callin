@@ -592,7 +592,7 @@ def update_sheet(df, worksheet_name="0", sheet_url=None):
 def update_single_call_row(df_contactos, idx, sheet_url):
     """
     Actualiza solo la fila específica de una llamada en Google Sheets
-    en lugar de sobreescribir todo el archivo.
+    usando el número de línea (índice + 2) para mayor precisión.
     
     Args:
         df_contactos: DataFrame completo de contactos
@@ -610,25 +610,62 @@ def update_single_call_row(df_contactos, idx, sheet_url):
         spreadsheet = gc.open_by_url(sheet_url)
         worksheet = spreadsheet.get_worksheet(0)
         
-        # Obtener la fila específica del DataFrame (idx + 2 porque Google Sheets es 1-indexed y tiene header)
+        # 🔥 MÉTODO POR NÚMERO DE LÍNEA (más confiable)
+        # Usar el índice directamente + 2 (header + 1-indexed)
         row_number = idx + 2
-        row_data = df_contactos.iloc[idx].values.tolist()
         
-        # Convertir valores None/NaN a strings vacíos para Google Sheets
-        row_data = [str(val) if val is not None and str(val) != 'nan' else '' for val in row_data]
+        # Verificar que la fila exista en el sheet
+        rate_limiter.check_and_wait(operation_type="read")
+        sheet_data = worksheet.get_all_values()
         
-        print(f"[DEBUG] Actualizando fila {row_number} en Sheet Llamadas")
-        print(f"[DEBUG] Datos: {row_data[:5]}...")  # Solo mostrar primeros 5 campos
+        if row_number > len(sheet_data):
+            print(f"[ERROR] Fila {row_number} no existe en sheet (total filas: {len(sheet_data)})")
+            return False
+        
+        # Obtener datos del contacto específico
+        contact_data = df_contactos.iloc[idx]
+        telefono_contacto = str(contact_data.get('telefono', ''))
+        nombre_contacto = str(contact_data.get('nombre', ''))
+        
+        print(f"[DEBUG] Actualizando por línea {row_number}:")
+        print(f"[DEBUG] Contacto: {nombre_contacto} - Tel: {telefono_contacto}")
+        
+        # Verificación adicional: comparar teléfono para seguridad
+        telefono_en_sheet = str(sheet_data[row_number - 1][list(sheet_data[0]).index('telefono')] if 'telefono' in sheet_data[0] else '')
+        telefono_normalizado = normalize_phone_for_search(telefono_contacto)
+        sheet_telefono_normalizado = normalize_phone_for_search(telefono_en_sheet)
+        
+        if telefono_normalizado and sheet_telefono_normalizado and telefono_normalizado != sheet_telefono_normalizado:
+            print(f"[WARNING] Discrepancia de teléfono: DF={telefono_contacto} vs Sheet={telefono_en_sheet}")
+            print(f"[WARNING] Continuando actualización por línea de todas formas...")
+        
+        # Preparar datos de la fila
+        row_data = []
+        headers = sheet_data[0]  # Headers del sheet
+        
+        for header in headers:
+            # Buscar el valor en el DataFrame (insensible a mayúsculas)
+            val = ""
+            for df_col in contact_data.index:
+                if df_col.lower() == header.lower():
+                    val = contact_data[df_col]
+                    break
+            
+            # Convertir a string seguro
+            val_str = str(val) if val is not None and str(val) != 'nan' else ''
+            row_data.append(val_str)
+        
+        print(f"[DEBUG] Datos a actualizar ({len(row_data)} columnas): {row_data[:3]}...")
         
         # Actualizar solo la fila específica
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.update(f'A{row_number}:{chr(65 + len(row_data) - 1)}{row_number}', [row_data])
         
-        print(f"[DEBUG] ✅ Fila {row_number} actualizada exitosamente")
+        print(f"[DEBUG] ✅ Fila {row_number} actualizada exitosamente por línea")
         return True
         
     except Exception as e:
-        print(f"[ERROR] Error actualizando fila específica: {e}")
+        print(f"[ERROR] Error actualizando fila por línea: {e}")
         import traceback
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
         return False
@@ -674,8 +711,8 @@ def normalize_phone_for_search(phone):
 
 def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
     """
-    Actualiza solo un contacto específico en el sheet sin afectar otros registros.
-    Busca el contacto por teléfono y actualiza solo esa fila.
+    Actualiza solo un contacto específico en el sheet usando número de línea.
+    MÉTODO ACTUALIZADO: Usa línea en lugar de búsqueda por teléfono para mayor confiabilidad.
     
     Args:
         df_contactos: DataFrame de contactos
@@ -693,70 +730,72 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         
         # Obtener datos del contacto específico
         contact_data = df_contactos.loc[idx]
-        telefono = normalize_phone_for_search(contact_data.get('telefono', ''))
+        telefono = str(contact_data.get('telefono', ''))
+        nombre = str(contact_data.get('nombre', ''))
         
-        if not telefono:
-            print(f"[ERROR] {operation_type} - No hay teléfono para identificar el contacto")
-            return False
+        print(f"[DEBUG] {operation_type} - Actualizando contacto por línea:")
+        print(f"[DEBUG] Contacto: {nombre} - Tel: {telefono} - Índice: {idx}")
         
         # Abrir el spreadsheet
         spreadsheet = gc.open_by_url(sheet_url)
         worksheet = spreadsheet.get_worksheet(0)
         
-        # Buscar la fila del contacto por teléfono
+        # 🔥 MÉTODO POR NÚMERO DE LÍNEA (más confiable que búsqueda por teléfono)
         rate_limiter.check_and_wait(operation_type="read")
-        existing_data = worksheet.get_all_records()
+        sheet_data = worksheet.get_all_values()
         
-        # Obtener headers reales del sheet para respetar el orden de columnas del usuario
-        if existing_data:
-            sheet_headers = list(existing_data[0].keys())
-        else:
-            sheet_headers = worksheet.row_values(1) # Fallback si no hay datos
+        # Calcular fila objetivo: índice + 2 (header + 1-indexed)
+        target_row = idx + 2
         
-        target_row = None
-        for i, existing_row in enumerate(existing_data):
-            # Comparación robusta: normalizar ambos números
-            existing_phone = normalize_phone_for_search(existing_row.get('telefono', ''))
-            if existing_phone == telefono:
-                target_row = i + 2  # +2 porque Google Sheets es 1-indexed y tiene header
-                break
+        # Verificar que la fila exista
+        if target_row > len(sheet_data):
+            print(f"[ERROR] {operation_type} - Fila {target_row} no existe (total: {len(sheet_data)})")
+            return False
         
-        # Si no se encuentra, agregar al final
-        if target_row is None:
-            target_row = len(existing_data) + 2
-            print(f"[DEBUG] {operation_type} - Contacto no encontrado, agregando en fila {target_row}")
-        else:
-            print(f"[DEBUG] {operation_type} - Actualizando contacto en fila {target_row}")
+        # Obtener headers del sheet
+        headers = sheet_data[0]
         
-        # Reconstruir datos respetando el orden de columnas del SHEET (no del DataFrame)
-        row_data = []
-        for col_header in sheet_headers:
-            # Buscar el valor en el DataFrame usando el nombre de columna (insensible a mayúsculas)
-            val = None
-            col_found = False
+        # Verificación de seguridad opcional: comparar teléfono
+        if 'telefono' in headers:
+            telefono_col_idx = headers.index('telefono')
+            telefono_en_sheet = str(sheet_data[target_row - 1][telefono_col_idx]) if target_row <= len(sheet_data) else ''
             
-            # Buscar coincidencia exacta o insensible a mayúsculas
+            telefono_normalizado = normalize_phone_for_search(telefono)
+            sheet_telefono_normalizado = normalize_phone_for_search(telefono_en_sheet)
+            
+            if telefono_normalizado and sheet_telefono_normalizado:
+                if telefono_normalizado != sheet_telefono_normalizado:
+                    print(f"[WARNING] {operation_type} - Discrepancia teléfono: DF={telefono} vs Sheet={telefono_en_sheet}")
+                    print(f"[WARNING] {operation_type} - Continuando por línea de todas formas...")
+                else:
+                    print(f"[DEBUG] {operation_type} - Teléfono coincide: {telefono}")
+        
+        # Preparar datos de la fila respetando el orden del sheet
+        row_data = []
+        for header in headers:
+            # Buscar el valor en el DataFrame (insensible a mayúsculas)
+            val = ""
             for df_col in contact_data.index:
-                if df_col.lower() == col_header.lower():
+                if df_col.lower() == header.lower():
                     val = contact_data[df_col]
-                    col_found = True
                     break
             
-            if not col_found:
-                val = "" # Si la columna del Excel no está en el DataFrame, dejar vacío
-                
+            # Convertir a string seguro
             val_str = str(val) if val is not None and str(val) != 'nan' else ''
             row_data.append(val_str)
+        
+        print(f"[DEBUG] {operation_type} - Preparando actualización fila {target_row}")
+        print(f"[DEBUG] {operation_type} - Columnas: {len(headers)} - Datos: {len(row_data)}")
         
         # Actualizar solo esta fila específica
         rate_limiter.check_and_wait(operation_type="write")
         worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
         
-        print(f"[DEBUG] {operation_type} - Fila {target_row} actualizada exitosamente para {telefono}")
+        print(f"[DEBUG] {operation_type} - ✅ Fila {target_row} actualizada exitosamente (método línea)")
         return True
         
     except Exception as e:
-        print(f"[ERROR] {operation_type} - Error actualizando contacto específico: {e}")
+        print(f"[ERROR] {operation_type} - Error actualizando por línea: {e}")
         import traceback
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
         return False
@@ -3049,12 +3088,12 @@ with tab_op:
                                  
                                         conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                         
-                                        # TwiML para el agente (con tonos de notificación)
+                                        # TwiML para el agente (optimizado para tablet con altavoz)
                                         twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Say language="es-MX">Conectando llamada</Say>
+                                            <Say language="es-MX" voice="alice">Conectando llamada</Say>
                                             <Play digits="1"></Play>
-                                            <Dial>
+                                            <Dial callerId="{twilio_number}" timeout="30">
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
@@ -3064,16 +3103,18 @@ with tab_op:
                                                     transcribe="true"
                                                     transcribeCallback="{function_url_base}/transcription-callback"
                                                     waitUrl=""
-                                                    beep="true"
+                                                    beep="false"
+                                                    maxParticipants="2"
+                                                    quiet="false"
                                                 >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
                                         
-                                        # TwiML para el cliente (conecta directamente a la conferencia)
+                                        # TwiML para el cliente (optimizado para mejor calidad de audio)
                                         # ✅ CORREGIDO: El cliente ya ve el Caller ID del agente en el from_= de la llamada
                                         twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
                                         <Response>
-                                            <Dial>
+                                            <Dial timeout="30" record="true">
                                                 <Conference 
                                                     startConferenceOnEnter="true"
                                                     endConferenceOnExit="true"
@@ -3083,7 +3124,9 @@ with tab_op:
                                                     transcribe="true"
                                                     transcribeCallback="{function_url_base}/transcription-callback"
                                                     waitUrl=""
-                                                    beep="true"
+                                                    beep="false"
+                                                    maxParticipants="2"
+                                                    quiet="false"
                                                 >{conference_name}</Conference>
                                             </Dial>
                                         </Response>"""
@@ -3220,6 +3263,48 @@ with tab_op:
                                         else:
                                             st.success(f"✅ Caller ID configurado correctamente: {numero_agente}")
                                             st.success(f"✅ El cliente verá solo tu número local")
+                                        
+                                        # 🎧 RECOMENDACIONES DE AUDIO PARA TABLET
+                                        with st.expander("🎧 Recomendaciones de Audio (Tablet)", expanded=False):
+                                            st.markdown("""
+                                            ### 🎧 **OPTIMIZACIÓN DE AUDIO PARA TABLET**
+                                            
+                                            #### **📱 PROBLEMAS COMUNES:**
+                                            - ❌ Audio cortado o entrecortado
+                                            - ❌ Eco o retroalimentación
+                                            - ❌ El cliente no escucha bien
+                                            - ❌ Se escucha distante o metálico
+                                            
+                                            #### **🎧 SOLUCIONES RECOMENDADAS:**
+                                            
+                                            **OPCIÓN 1: AUDÍFONOS (RECOMENDADO)** ✅
+                                            - 🎧 Usar audífonos con micrófono
+                                            - 📱 Conectar por Bluetooth o cable
+                                            - 🔊 Elimina eco y retroalimentación
+                                            - 🎯 Mejor calidad de sonido
+                                            
+                                            **OPCIÓN 2: CONFIGURACIÓN TABLET** ⚙️
+                                            - 📱 Subir volumen al 80% (no 100%)
+                                            - 🎯 Mantener tablet a 30cm de la boca
+                                            - 🏠 Usar en lugar tranquilo sin eco
+                                            - 📵 WiFi estable y cerca del router
+                                            
+                                            **OPCIÓN 3: POSICIÓN ÓPTIMA** 📐
+                                            - 📱 Ángulo de 45 grados hacia la boca
+                                            - 🎯 No cubrir el micrófono con la mano
+                                            - 🏠 Superficie estable (no sostener en mano)
+                                            - 📵 Evitar mover la tablet durante llamada
+                                            
+                                            #### **🔧 SI SIGUE CON PROBLEMAS:**
+                                            1. 🎧 **Probar con audífonos** (solución más efectiva)
+                                            2. 📱 **Reiniciar la tablet** antes de iniciar
+                                            3. 📵 **Verificar conexión WiFi** (mínimo 3MB estable)
+                                            4. 🎯 **Cerrar otras aplicaciones** en la tablet
+                                            5. 📱 **Actualizar sistema operativo** de la tablet
+                                            
+                                            #### **✅ MEJOR PRÁCTICA:**
+                                            **Recomendamos usar audífonos con micrófono para calidad profesional.**
+                                            """)
                                         
                                         st.balloons()  # Celebración exitosa
                                         
