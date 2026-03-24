@@ -3067,12 +3067,13 @@ with tab_op:
                     tel = str(c['telefono']) if str(c['telefono']).startswith('+') else f"+{str(c['telefono'])}"
 
                 # 🔥 IDENTIFICACIÓN VISUAL ESPECIAL PARA CONTACTO ACTIVO
-                es_activo = c.get('activo_en_conference', False)
+                # 🔥 CORRECCIÓN: Asegurar que es_activo sea booleano, no float
+                es_activo = bool(c.get('activo_en_conference', False))
                 icono_activo = "🔴" if es_activo else "📞"
                 titulo_activo = f" {icono_activo} **LLAMANDO** - " if es_activo else f" {icono_activo} "
                 
-                # Crear un expander para cada contacto
-                with st.expander(f"{titulo_activo}{c['nombre']} - {tel}", expanded=es_activo):
+                # 🔥 CORRECCIÓN: Convertir es_activo a int para expanded parameter
+                with st.expander(f"{titulo_activo}{c['nombre']} - {tel}", expanded=bool(es_activo)):
                     col1, col2 = st.columns([2,1])
                     
                     # 🔥 INDICADOR VISUAL PARA CONTACTO ACTIVO
