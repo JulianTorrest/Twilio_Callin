@@ -3262,60 +3262,60 @@ with tab_op:
                                         add_log(f"CONFERENCE_ERROR - Contacto incompleto: {c}", "ERROR")
                                         st.stop()
                                         
-                                        # Validar que no haya llamada activa
-                                        if st.session_state.llamada_activa_sid is not None:
-                                            st.error(f"❌ ERROR: Ya hay una llamada activa")
-                                            st.error(f"❌ SID activo: {st.session_state.llamada_activa_sid}")
-                                            add_log(f"CONFERENCE_ERROR - Llamada ya activa: {st.session_state.llamada_activa_sid}", "ERROR")
-                                            st.stop()
+                                    # Validar que no haya llamada activa
+                                    if st.session_state.llamada_activa_sid is not None:
+                                        st.error(f"❌ ERROR: Ya hay una llamada activa")
+                                        st.error(f"❌ SID activo: {st.session_state.llamada_activa_sid}")
+                                        add_log(f"CONFERENCE_ERROR - Llamada ya activa: {st.session_state.llamada_activa_sid}", "ERROR")
+                                        st.stop()
+                                    
+                                    # Validar número del agente
+                                    if not st.session_state.numero_celular_agente:
+                                        st.error(f"❌ ERROR: No hay número de agente configurado")
+                                        add_log(f"CONFERENCE_ERROR - Sin número de agente", "ERROR")
+                                        st.stop()
+                                    
+                                    # 🔥 PROTECCIÓN MEJORADA ANTES DE LA LLAMADA
+                                    if not st.session_state.df_contactos.empty and 0 <= idx < len(st.session_state.df_contactos):
+                                        # Guardar estado completo del DataFrame
+                                        st.session_state.df_contactos_backup = st.session_state.df_contactos.copy()
                                         
-                                        # Validar número del agente
-                                        if not st.session_state.numero_celular_agente:
-                                            st.error(f"❌ ERROR: No hay número de agente configurado")
-                                            add_log(f"CONFERENCE_ERROR - Sin número de agente", "ERROR")
-                                            st.stop()
+                                        # Guardar contacto específico con más detalles
+                                        contacto_backup = {
+                                            'nombre': c['nombre'],
+                                            'telefono': tel,
+                                            'indice': idx,
+                                            'timestamp': datetime.now().isoformat(),
+                                            'estado_anterior': c.get('estado', 'Pendiente'),
+                                            'datos_completos': c.to_dict() if hasattr(c, 'to_dict') else c
+                                        }
+                                        st.session_state.contacto_llamada_actual = contacto_backup
                                         
-                                        # 🔥 PROTECCIÓN MEJORADA ANTES DE LA LLAMADA
-                                        if not st.session_state.df_contactos.empty and 0 <= idx < len(st.session_state.df_contactos):
-                                            # Guardar estado completo del DataFrame
-                                            st.session_state.df_contactos_backup = st.session_state.df_contactos.copy()
-                                            
-                                            # Guardar contacto específico con más detalles
-                                            contacto_backup = {
-                                                'nombre': c['nombre'],
-                                                'telefono': tel,
-                                                'indice': idx,
-                                                'timestamp': datetime.now().isoformat(),
-                                                'estado_anterior': c.get('estado', 'Pendiente'),
-                                                'datos_completos': c.to_dict() if hasattr(c, 'to_dict') else c
-                                            }
-                                            st.session_state.contacto_llamada_actual = contacto_backup
-                                            
-                                            print(f"[DEBUG] DataFrame backup guardado: {len(st.session_state.df_contactos_backup)} contactos")
-                                            print(f"[DEBUG] Contacto backup guardado: {contacto_backup}")
-                                        else:
-                                            st.error(f"❌ ERROR: Índice inválido o DataFrame vacío")
-                                            st.error(f"❌ Índice: {idx} vs Total: {len(st.session_state.df_contactos)}")
-                                            add_log(f"CONFERENCE_CRITICAL_ERROR - Índice inválido antes de llamada", "ERROR")
-                                            st.stop()
-                                        
-                                        # Crear conference call: Twilio llama primero al agente, luego al cliente
-                                        # El cliente verá el número del agente como Caller ID
-                                         
-                                        # Paso 1: Llamar al agente primero
-                                        print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
-                                 
-                                        conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                        
-                                        # TwiML para el agente (optimizado para tablet con altavoz)
-                                        twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
-                                        <Response>
-                                            <Say language="es-MX" voice="alice">Conectando llamada</Say>
-                                            <Play digits="1"></Play>
-                                            <Dial callerId="{twilio_number}" timeout="30">
-                                                <Conference 
-                                                    startConferenceOnEnter="true"
-                                                    endConferenceOnExit="true"
+                                        print(f"[DEBUG] DataFrame backup guardado: {len(st.session_state.df_contactos_backup)} contactos")
+                                        print(f"[DEBUG] Contacto backup guardado: {contacto_backup}")
+                                    else:
+                                        st.error(f"❌ ERROR: Índice inválido o DataFrame vacío")
+                                        st.error(f"❌ Índice: {idx} vs Total: {len(st.session_state.df_contactos)}")
+                                        add_log(f"CONFERENCE_CRITICAL_ERROR - Índice inválido antes de llamada", "ERROR")
+                                        st.stop()
+                                    
+                                    # Crear conference call: Twilio llama primero al agente, luego al cliente
+                                    # El cliente verá el número del agente como Caller ID
+                                     
+                                    # Paso 1: Llamar al agente primero
+                                    print(f"[DEBUG] Iniciando conference call - Llamando a agente: {st.session_state.numero_celular_agente}")
+                             
+                                    conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                    
+                                    # TwiML para el agente (optimizado para tablet con altavoz)
+                                    twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                                    <Response>
+                                        <Say language="es-MX" voice="alice">Conectando llamada</Say>
+                                        <Play digits="1"></Play>
+                                        <Dial callerId="{twilio_number}" timeout="30">
+                                            <Conference 
+                                                startConferenceOnEnter="true"
+                                                endConferenceOnExit="true"
                                                     record="record-from-start"
                                                     recordingStatusCallback="{function_url_base}/recording-status"
                                                     trim="trim-silence"
@@ -3327,172 +3327,173 @@ with tab_op:
                                                     quiet="false"
                                                 >{conference_name}</Conference>
                                             </Dial>
-                                        </Response>"""
-                                        
-                                        # TwiML para el cliente (optimizado para mejor calidad de audio)
-                                        # ✅ CORREGIDO: El cliente ya ve el Caller ID del agente en el from_= de la llamada
-                                        twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
-                                        <Response>
-                                            <Dial timeout="30" record="true">
-                                                <Conference 
-                                                    startConferenceOnEnter="true"
-                                                    endConferenceOnExit="true"
-                                                    record="record-from-start"
-                                                    recordingStatusCallback="{function_url_base}/recording-status"
-                                                    trim="trim-silence"
-                                                    transcribe="true"
-                                                    transcribeCallback="{function_url_base}/transcription-callback"
-                                                    waitUrl=""
-                                                    beep="false"
-                                                    maxParticipants="2"
-                                                    quiet="false"
-                                                >{conference_name}</Conference>
-                                            </Dial>
-                                        </Response>"""
-                                        
-                                        # Llamar al agente (el agente ve el número de Twilio)
-                                        call_agente = client.calls.create(
-                                            twiml=twiml_agente,
-                                            to=st.session_state.numero_celular_agente,
-                                            from_=twilio_number,  # El agente ve el número de Twilio
-                                            status_callback=f"{function_url}/status",
-                                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                        )
-                                        
-                                        # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
-                                        
-                                        # 🔍 ANÁLISIS DETALLADO DEL CALLER ID
-                                        numero_agente = st.session_state.numero_celular_agente
-                                        print(f"[DEBUG] Número del agente en sesión: {numero_agente}")
-                                        print(f"[DEBUG] Tipo de dato: {type(numero_agente)}")
-                                        
-                                        # 🔍 VERIFICAR FORMATO Y PROBLEMAS
-                                        numero_str = str(numero_agente).strip()
-                                        print(f"[DEBUG] Número original: '{numero_str}'")
-                                        print(f"[DEBUG] Longitud: {len(numero_str)}")
-                                        print(f"[DEBUG] Empieza con +57: {numero_str.startswith('+57')}")
-                                        print(f"[DEBUG] Contiene +1: {'+1' in numero_str}")
-                                        
-                                        # 🔥 SOLUCIÓN DEFINITIVA: Limpiar cualquier +1 que pueda causar problemas
-                                        # El problema es que cualquier +1 en el número hace que Twilio lo interprete como número de EE.UU.
-                                        numero_limpio = numero_str
-                                        
-                                        # Remover cualquier +1 que pueda estar causando el problema
-                                        if '+1' in numero_limpio:
-                                            print(f"[DEBUG] Detectado +1 en número, limpiando...")
-                                            numero_limpio = numero_limpio.replace('+1', '')
-                                            # Asegurar que empiece con +57 si es un número colombiano
-                                            if not numero_limpio.startswith('+57') and numero_limpio.startswith('57'):
-                                                numero_limpio = '+' + numero_limpio
-                                            elif not numero_limpio.startswith('+57'):
-                                                # Si no tiene código de país, asumir Colombia
-                                                if len(numero_limpio) == 10 and numero_limpio.startswith('3'):
-                                                    numero_limpio = '+57' + numero_limpio
-                                                
-                                            print(f"[DEBUG] Número limpio: '{numero_limpio}'")
-                                            
-                                            # Actualizar el número en sesión para futuras llamadas
-                                            st.session_state.numero_celular_agente = numero_limpio
-                                            numero_agente = numero_limpio
-                                            numero_str = numero_limpio
-                                            
-                                            st.warning(f"🔧 Número corregido para evitar +1: {numero_agente}")
-                                        
-                                        # Validación final
-                                        if not numero_str.startswith('+57'):
-                                            st.error(f"❌ ERROR: Formato inválido después de limpieza: {numero_str}")
-                                            st.error("❌ Debe empezar con +57 para Colombia")
-                                            st.stop()
-                                        
-                                        print(f"[DEBUG] Número final para Caller ID: '{numero_str}'")
-                                        print(f"[DEBUG] Llamando a cliente: {tel}")
-                                        
-                                        # 🔍 REGISTRO ANTES DE LA LLAMADA TWILIO
-                                        print(f"[TWILIO_CALL] Parámetros:")
-                                        print(f"  - to: {tel}")
-                                        print(f"  - from_: {numero_agente}")
-                                        print(f"  - from_ length: {len(str(numero_agente))}")
-                                        print(f"  - from_ starts with +57: {str(numero_agente).startswith('+57')}")
-                                        print(f"  - from_ contains +1: {'+1' in str(numero_agente)}")
-                                        
-                                        # 🔥 VERIFICACIÓN FINAL ANTES DE ENVIAR A TWILIO
-                                        if '+1' in str(numero_agente):
-                                            st.error(f"❌ ERROR CRÍTICO: El número todavía contiene +1: {numero_agente}")
-                                            st.error("❌ Esto causará que el cliente vea +1 57xxx")
-                                            st.stop()
-                                        
-                                        call_cliente = client.calls.create(
-                                            twiml=twiml_cliente,
-                                            to=tel,
+                                    </Response>"""
+                                    
+                                    # TwiML para el cliente (optimizado para mejor calidad de audio)
+                                    # ✅ CORREGIDO: El cliente ya ve el Caller ID del agente en el from_= de la llamada
+                                    twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                                    <Response>
+                                        <Dial timeout="30" record="true">
+                                            <Conference 
+                                                startConferenceOnEnter="true"
+                                                endConferenceOnExit="true"
+                                                record="record-from-start"
+                                                recordingStatusCallback="{function_url_base}/recording-status"
+                                                trim="trim-silence"
+                                                transcribe="true"
+                                                transcribeCallback="{function_url_base}/transcription-callback"
+                                                waitUrl=""
+                                                beep="false"
+                                                maxParticipants="2"
+                                                quiet="false"
+                                            >{conference_name}</Conference>
+                                        </Dial>
+                                    </Response>"""
+                                    
+                                    # Llamar al agente (el agente ve el número de Twilio)
+                                    call_agente = client.calls.create(
+                                        twiml=twiml_agente,
+                                        to=st.session_state.numero_celular_agente,
+                                        from_=twilio_number,  # El agente ve el número de Twilio
+                                        status_callback=f"{function_url}/status",
+                                        status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                                    )
+                                    
+                                    # Llamar al cliente inmediatamente (el agente ya está en la conferencia al contestar)
+                                    
+                                    # 🔍 ANÁLISIS DETALLADO DEL CALLER ID
+                                    numero_agente = st.session_state.numero_celular_agente
+                                    print(f"[DEBUG] Número del agente en sesión: {numero_agente}")
+                                    print(f"[DEBUG] Tipo de dato: {type(numero_agente)}")
+                                    
+                                    # 🔍 VERIFICAR FORMATO Y PROBLEMAS
+                                    numero_str = str(numero_agente).strip()
+                                    print(f"[DEBUG] Número original: '{numero_str}'")
+                                    print(f"[DEBUG] Longitud: {len(numero_str)}")
+                                    print(f"[DEBUG] Empieza con +57: {numero_str.startswith('+57')}")
+                                    print(f"[DEBUG] Contiene +1: {'+1' in numero_str}")
+                                    
+                                    # 🔥 SOLUCIÓN DEFINITIVA: Limpiar cualquier +1 que pueda causar problemas
+                                    # El problema es que cualquier +1 en el número hace que Twilio lo interprete como número de EE.UU.
+                                    numero_limpio = numero_str
+                                    
+                                    # Remover cualquier +1 que pueda estar causando el problema
+                                    if '+1' in numero_limpio:
+                                        print(f"[DEBUG] Detectado +1 en número, limpiando...")
+                                        numero_limpio = numero_limpio.replace('+1', '')
+                                        # Asegurar que empiece con +57 si es un número colombiano
+                                        if not numero_limpio.startswith('+57') and numero_limpio.startswith('57'):
+                                            numero_limpio = '+' + numero_limpio
+                                        elif not numero_limpio.startswith('+57'):
+                                            # Si no tiene código de país, asumir Colombia
+                                            if len(numero_limpio) == 10 and numero_limpio.startswith('3'):
+                                                numero_limpio = '+57' + numero_limpio
+                                    
+                                    print(f"[DEBUG] Número limpio: '{numero_limpio}'")
+                                    
+                                    # Actualizar el número en sesión para futuras llamadas
+                                    st.session_state.numero_celular_agente = numero_limpio
+                                    numero_agente = numero_limpio
+                                    numero_str = numero_limpio
+                                    
+                                    if '+1' in numero_str:
+                                        st.warning(f"🔧 Número corregido para evitar +1: {numero_agente}")
+                                    
+                                    # Validación final
+                                    if not numero_str.startswith('+57'):
+                                        st.error(f"❌ ERROR: Formato inválido después de limpieza: {numero_str}")
+                                        st.error("❌ Debe empezar con +57 para Colombia")
+                                        st.stop()
+                                    
+                                    print(f"[DEBUG] Número final para Caller ID: '{numero_str}'")
+                                    print(f"[DEBUG] Llamando a cliente: {tel}")
+                                    
+                                    # 🔍 REGISTRO ANTES DE LA LLAMADA TWILIO
+                                    print(f"[TWILIO_CALL] Parámetros:")
+                                    print(f"  - to: {tel}")
+                                    print(f"  - from_: {numero_agente}")
+                                    print(f"  - from_ length: {len(str(numero_agente))}")
+                                    print(f"  - from_ starts with +57: {str(numero_agente).startswith('+57')}")
+                                    print(f"  - from_ contains +1: {'+1' in str(numero_agente)}")
+                                    
+                                    # 🔥 VERIFICACIÓN FINAL ANTES DE ENVIAR A TWILIO
+                                    if '+1' in str(numero_agente):
+                                        st.error(f"❌ ERROR CRÍTICO: El número todavía contiene +1: {numero_agente}")
+                                        st.error("❌ Esto causará que el cliente vea +1 57xxx")
+                                        st.stop()
+                                    
+                                    call_cliente = client.calls.create(
+                                        twiml=twiml_cliente,
+                                        to=tel,
                                             from_=numero_agente,  # ✅ LIMPIO: Sin +1 que cause problemas
                                             machine_detection='Enable',
                                             status_callback=f"{function_url}/status",
                                             status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                                        )
+                                    )
+                                    
+                                    # 🔍 VERIFICACIÓN POST-LLAMADA
+                                    print(f"[TWILIO_RESPONSE] Llamada creada con SID: {call_cliente.sid}")
+                                    print(f"[TWILIO_RESPONSE] Llamada al cliente: {tel}")
+                                    print(f"[TWILIO_RESPONSE] Caller ID configurado: {numero_agente}")
+                                    
+                                    # ✅ REMOVIDA: Verificación de discrepancia que causaba falsos positivos
+                                    # El Caller ID se configura correctamente en el parámetro from_=numero_agente
+                                    # No necesitamos verificar el atributo .from ya que puede tardar en actualizarse
+                                    # o puede diferir por formatos internos de Twilio
+                                    
+                                    print(f"[DEBUG] Conference Call iniciada exitosamente")
+                                    add_log(f"CONFERENCE_CALL_SUCCESS - Cliente: {tel} - Caller ID: {numero_agente}", "TWILIO")
+                                    
+                                    # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
+                                    st.session_state.llamada_activa_sid = call_cliente.sid
+                                    st.session_state.conference_name = conference_name
+                                    st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
+                                    st.session_state.t_inicio_dt = datetime.now()
+                                    print(f"[DEBUG] Conference creada: {conference_name}")
+                                    
+                                    # 🔥 VERIFICACIÓN POST-CREACIÓN
+                                    print(f"[DEBUG] Estado después de crear llamada:")
+                                    print(f"  - llamada_activa_sid: {st.session_state.llamada_activa_sid}")
+                                    print(f"  - conference_idx: {st.session_state.conference_idx}")
+                                    print(f"  - Total contactos: {len(st.session_state.df_contactos)}")
+                                    print(f"  - Índice válido: {0 <= st.session_state.conference_idx < len(st.session_state.df_contactos)}")
+                                    
+                                    # 🔥 RECUPERACIÓN AUTOMÁTICA SI EL CONTACTO DESAPARECIÓ
+                                    if st.session_state.conference_idx >= len(st.session_state.df_contactos):
+                                        print(f"[WARNING] Contacto en índice {st.session_state.conference_idx} desapareció después de crear la llamada")
+                                        add_log(f"CONFERENCE_WARNING - Contacto desaparecido post-llamada, intentando recuperar", "WARNING")
                                         
-                                        # 🔍 VERIFICACIÓN POST-LLAMADA
-                                        print(f"[TWILIO_RESPONSE] Llamada creada con SID: {call_cliente.sid}")
-                                        print(f"[TWILIO_RESPONSE] Llamada al cliente: {tel}")
-                                        print(f"[TWILIO_RESPONSE] Caller ID configurado: {numero_agente}")
-                                        
-                                        # ✅ REMOVIDA: Verificación de discrepancia que causaba falsos positivos
-                                        # El Caller ID se configura correctamente en el parámetro from_=numero_agente
-                                        # No necesitamos verificar el atributo .from ya que puede tardar en actualizarse
-                                        # o puede diferir por formatos internos de Twilio
-                                        
-                                        print(f"[DEBUG] Conference Call iniciada exitosamente")
-                                        add_log(f"CONFERENCE_CALL_SUCCESS - Cliente: {tel} - Caller ID: {numero_agente}", "TWILIO")
-                                        
-                                        # Guardar el SID de la llamada del cliente y el nombre de la conferencia (para tracking)
-                                        st.session_state.llamada_activa_sid = call_cliente.sid
-                                        st.session_state.conference_name = conference_name
-                                        st.session_state.conference_idx = idx  # Guardar el índice del contacto activo
-                                        st.session_state.t_inicio_dt = datetime.now()
-                                        print(f"[DEBUG] Conference creada: {conference_name}")
-                                        
-                                        # 🔥 VERIFICACIÓN POST-CREACIÓN
-                                        print(f"[DEBUG] Estado después de crear llamada:")
-                                        print(f"  - llamada_activa_sid: {st.session_state.llamada_activa_sid}")
-                                        print(f"  - conference_idx: {st.session_state.conference_idx}")
-                                        print(f"  - Total contactos: {len(st.session_state.df_contactos)}")
-                                        print(f"  - Índice válido: {0 <= st.session_state.conference_idx < len(st.session_state.df_contactos)}")
-                                        
-                                        # 🔥 RECUPERACIÓN AUTOMÁTICA SI EL CONTACTO DESAPARECIÓ
-                                        if st.session_state.conference_idx >= len(st.session_state.df_contactos):
-                                            print(f"[WARNING] Contacto en índice {st.session_state.conference_idx} desapareció después de crear la llamada")
-                                            add_log(f"CONFERENCE_WARNING - Contacto desaparecido post-llamada, intentando recuperar", "WARNING")
+                                        # Intentar recuperar del backup
+                                        recuperado = False
+                                        if 'contacto_llamada_actual' in st.session_state:
+                                            backup = st.session_state.contacto_llamada_actual
+                                            print(f"[DEBUG] Intentando recuperar contacto: {backup['nombre']}")
                                             
-                                            # Intentar recuperar del backup
-                                            recuperado = False
-                                            if 'contacto_llamada_actual' in st.session_state:
-                                                backup = st.session_state.contacto_llamada_actual
-                                                print(f"[DEBUG] Intentando recuperar contacto: {backup['nombre']}")
+                                            # Restaurar DataFrame completo si es necesario
+                                            if 'df_contactos_backup' in st.session_state:
+                                                st.session_state.df_contactos = st.session_state.df_contactos_backup.copy()
+                                                print(f"[DEBUG] DataFrame restaurado desde backup ({len(st.session_state.df_contactos)} contactos)")
                                                 
-                                                # Restaurar DataFrame completo si es necesario
-                                                if 'df_contactos_backup' in st.session_state:
-                                                    st.session_state.df_contactos = st.session_state.df_contactos_backup.copy()
-                                                    print(f"[DEBUG] DataFrame restaurado desde backup ({len(st.session_state.df_contactos)} contactos)")
-                                                    
-                                                    # Verificar que el contacto ahora exista
-                                                    if st.session_state.conference_idx < len(st.session_state.df_contactos):
-                                                        print(f"[DEBUG] Contacto recuperado exitosamente")
-                                                        add_log(f"CONFERENCE_RECOVERY - Contacto recuperado exitosamente: {backup['nombre']}", "SUCCESS")
-                                                        recuperado = True
-                                                        st.success(f"✅ Contacto recuperado: {backup['nombre']}")
-                                                    else:
-                                                        print(f"[ERROR] No se pudo recuperar el contacto incluso con backup")
-                                                        add_log(f"CONFERENCE_ERROR - Falló recuperación de contacto", "ERROR")
-                                                        st.error(f"❌ ERROR CRÍTICO: No se pudo recuperar el contacto")
-                                                        st.error(f"❌ Backup disponible: {backup['nombre']} - {backup['telefono']}")
-                                                        st.stop()
+                                                # Verificar que el contacto ahora exista
+                                                if st.session_state.conference_idx < len(st.session_state.df_contactos):
+                                                    print(f"[DEBUG] Contacto recuperado exitosamente")
+                                                    add_log(f"CONFERENCE_RECOVERY - Contacto recuperado exitosamente: {backup['nombre']}", "SUCCESS")
+                                                    recuperado = True
+                                                    st.success(f"✅ Contacto recuperado: {backup['nombre']}")
                                                 else:
-                                                    print(f"[ERROR] No hay backup de DataFrame disponible")
-                                                    add_log(f"CONFERENCE_ERROR - Sin backup de DataFrame", "ERROR")
-                                            
-                                            if not recuperado:
-                                                st.error(f"❌ ERROR CRÍTICO: El contacto desapareció y no se pudo recuperar")
-                                                st.error(f"❌ Índice: {st.session_state.conference_idx} vs Total: {len(st.session_state.df_contactos)}")
-                                                st.stop()
+                                                    print(f"[ERROR] No se pudo recuperar el contacto incluso con backup")
+                                                    add_log(f"CONFERENCE_ERROR - Falló recuperación de contacto", "ERROR")
+                                                    st.error(f"❌ ERROR CRÍTICO: No se pudo recuperar el contacto")
+                                                    st.error(f"❌ Backup disponible: {backup['nombre']} - {backup['telefono']}")
+                                                    st.stop()
+                                            else:
+                                                print(f"[ERROR] No hay backup de DataFrame disponible")
+                                                add_log(f"CONFERENCE_ERROR - Sin backup de DataFrame", "ERROR")
+                                        
+                                        if not recuperado:
+                                            st.error(f"❌ ERROR CRÍTICO: El contacto desapareció y no se pudo recuperar")
+                                            st.error(f"❌ Índice: {st.session_state.conference_idx} vs Total: {len(st.session_state.df_contactos)}")
+                                            st.stop()
                                         
                                         add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
                                         add_log(f"CALLER_ID_CONFIGURED - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
