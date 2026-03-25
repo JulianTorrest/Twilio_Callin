@@ -3236,8 +3236,8 @@ with tab_op:
     if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
         idx_activo = st.session_state.conference_idx
         
-        # 🔥 CORRECCIÓN: Validar que df no sea None ni esté vacío
-        if df is not None and not df.empty and idx_activo < len(df):
+        # 🔥 CORRECCIÓN CRÍTICA: Validar que idx_activo no sea None y sea válido
+        if df is not None and not df.empty and idx_activo is not None and isinstance(idx_activo, int) and idx_activo >= 0 and idx_activo < len(df):
             contacto_activo = df.iloc[idx_activo]
             inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
             
@@ -4035,8 +4035,8 @@ with tab_op:
                                     answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
                                     es_maquina = answered_by in ['machine_start', 'fax']
                                     
-                                    # PRIORIDAD MEDIA 3: Timeout de conferencia INTELIGENTE (>60s con 1 solo participante)
-                                    if not call_ended_by_system and tiempo_transcurrido > 60 and remote.status == 'in-progress':
+                                    # PRIORIDAD MEDIA 3: Timeout de conferencia INTELIGENTE (>60s con 1 solo participante o sin respuesta)
+                                    if not call_ended_by_system and tiempo_transcurrido > 60 and remote.status in ['in-progress', 'ringing']:
                                         try:
                                             # Verificar cuántos participantes hay en la conferencia
                                             conference_name = st.session_state.get('conference_name', None)
@@ -4088,6 +4088,18 @@ with tab_op:
                                             except Exception as e2:
                                                 print(f"[ERROR] Error finalizando por timeout: {e2}")
                                                 st.error(f"Error: {e2}")
+                                    
+                                    # 🔥 TIMEOUT ESPECÍFICO PARA NO CONTESTADOS (>20s)
+                                    elif not call_ended_by_system and tiempo_transcurrido > 20 and remote.status == 'ringing':
+                                        st.warning(f"⏰ Tiempo de espera agotado ({tiempo_transcurrido}s) - Cliente no contestó")
+                                        st.info("📞 Finalizando llamada como 'No Contesto'")
+                                        try:
+                                            client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                                            call_ended_by_system = True
+                                            time.sleep(2)
+                                            st.rerun()
+                                        except Exception as e:
+                                            print(f"[ERROR] Error finalizando por no contestado: {e}")
                                     
                                     # Colgar automáticamente si es máquina
                                     elif es_maquina and not call_ended_by_system:
