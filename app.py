@@ -840,14 +840,34 @@ def update_contact_by_phone_fallback(df_contactos, idx, sheet_url, agente_id, op
     try:
         print(f"[DEBUG] {operation_type} - INICIANDO FALLBACK POR TELÉFONO")
         
-        # Obtener datos del contacto usando el índice local
-        if idx >= len(df_contactos):
-            print(f"[ERROR] {operation_type} - Índice {idx} fuera de rango incluso para fallback")
-            return False
+        # 🔥 CORRECCIÓN: Obtener datos del contacto usando el índice local
+        # Si el índice está fuera de rango, buscar el contacto por otros medios
+        contact_data = None
+        telefono_local = None
+        nombre_local = None
+        
+        if idx < len(df_contactos):
+            contact_data = df_contactos.loc[idx]
+            telefono_local = str(contact_data.get('telefono', ''))
+            nombre_local = str(contact_data.get('nombre', ''))
+            print(f"[DEBUG] {operation_type} - Contacto encontrado por índice {idx}: {nombre_local}")
+        else:
+            print(f"[ERROR] {operation_type} - Índice {idx} fuera de rango del DataFrame local")
+            print(f"[DEBUG] {operation_type} - Intentando buscar contacto en session_state...")
             
-        contact_data = df_contactos.loc[idx]
-        telefono_local = str(contact_data.get('telefono', ''))
-        nombre_local = str(contact_data.get('nombre', ''))
+            # 🔥 FALLBACK: Buscar en session_state.df_contactos si existe
+            if hasattr(st.session_state, 'df_contactos') and st.session_state.df_contactos is not None:
+                if idx < len(st.session_state.df_contactos):
+                    contact_data = st.session_state.df_contactos.loc[idx]
+                    telefono_local = str(contact_data.get('telefono', ''))
+                    nombre_local = str(contact_data.get('nombre', ''))
+                    print(f"[DEBUG] {operation_type} - Contacto encontrado en session_state: {nombre_local}")
+                else:
+                    print(f"[ERROR] {operation_type} - Índice {idx} también fuera de rango en session_state")
+                    return False
+            else:
+                print(f"[ERROR] {operation_type} - No hay session_state.df_contactos disponible")
+                return False
         
         print(f"[DEBUG] {operation_type} - Buscando teléfono {telefono_local} en sheet...")
         
