@@ -14,6 +14,7 @@ from pytz import timezone
 import pytz
 import math
 import random
+import json
 
 # --- CONFIGURACION DE PAGINA ---
 st.set_page_config(page_title="Camacol Dialer Pro v4.5 - Enhanced", layout="wide")
@@ -160,6 +161,128 @@ def formatear_fecha_bogota(fecha):
     if fecha.tzinfo is None:
         fecha = TZ_BOGOTA.localize(fecha)
     return fecha
+
+# --- SISTEMA DE PERSISTENCIA DE LLAMADAS ACTIVAS ---
+def guardar_llamada_activa_en_cookie():
+    """Guarda el estado de la llamada activa en cookies del navegador"""
+    if st.session_state.get('llamada_activa_sid') and st.session_state.get('agente_id'):
+        llamada_data = {
+            'llamada_activa_sid': st.session_state.llamada_activa_sid,
+            'conference_name': st.session_state.get('conference_name', ''),
+            'conference_idx': st.session_state.get('conference_idx', 0),
+            't_inicio_dt': st.session_state.t_inicio_dt.isoformat() if hasattr(st.session_state.t_inicio_dt, 'isoformat') else str(st.session_state.t_inicio_dt),
+            'agente_id': st.session_state.agente_id,
+            'webrtc_activo': st.session_state.get('webrtc_activo', False),
+            'webrtc_numero': st.session_state.get('webrtc_numero', ''),
+            'webrtc_nombre': st.session_state.get('webrtc_nombre', ''),
+            'webrtc_idx': st.session_state.get('webrtc_idx', 0),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Guardar en cookie usando JavaScript
+        cookie_script = f"""
+        <script>
+        document.cookie = 'llamada_activa={json.dumps(llamada_data)}; max-age=3600; path=/';
+        console.log('Llamada activa guardada en cookie');
+        </script>
+        """
+        st.components.v1.html(cookie_script, height=0)
+        print(f"[PERSISTENCE] Llamada activa guardada en cookie para agente {st.session_state.agente_id}")
+
+def recuperar_llamada_activa_desde_cookie():
+    """Recupera el estado de la llamada activa desde cookies del navegador"""
+    try:
+        # Intentar leer la cookie usando JavaScript
+        cookie_script = """
+        <script>
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+        }
+        
+        const llamadaData = getCookie('llamada_activa');
+        if (llamadaData) {
+            window.parent.postMessage({
+                type: 'llamada_activa_recuperada',
+                data: llamadaData
+            }, '*');
+        }
+        </script>
+        """
+        st.components.v1.html(cookie_script, height=0)
+        
+        # Verificar si hay datos de llamada recuperados
+        if 'llamada_recuperada_data' in st.query_params:
+            try:
+                llamada_data = json.loads(st.query_params['llamada_recuperada_data'][0])
+                return llamada_data
+            except:
+                pass
+    except Exception as e:
+        print(f"[PERSISTENCE] Error recuperando llamada desde cookie: {e}")
+    
+    return None
+
+def verificar_llamada_activa_en_twilio(llamada_sid):
+    """Verifica si una llamada sigue activa en Twilio"""
+    try:
+        if not llamada_sid:
+            return False
+        
+        call = client.calls(llamada_sid).fetch()
+        return call.status in ['in-progress', 'queued', 'ringing']
+    except Exception as e:
+        print(f"[PERSISTENCE] Error verificando llamada en Twilio: {e}")
+        return False
+
+def restaurar_llamada_activa():
+    """Restaura el estado de una llamada activa desde persistencia"""
+    print(f"[PERSISTENCE] Iniciando restauración de llamada activa...")
+    
+    # Intentar recuperar desde cookie
+    llamada_data = recuperar_llamada_activa_desde_cookie()
+    
+    if llamada_data:
+        print(f"[PERSISTENCE] Datos de llamada recuperados: {llamada_data}")
+        
+        # Verificar que la llamada siga activa en Twilio
+        llamada_sid = llamada_data.get('llamada_activa_sid')
+        if verificar_llamada_activa_en_twilio(llamada_sid):
+            print(f"[PERSISTENCE] Llamada {llamada_sid} sigue activa en Twilio")
+            
+            # Restaurar estado en session_state
+            st.session_state.llamada_activa_sid = llamada_data['llamada_activa_sid']
+            st.session_state.conference_name = llamada_data.get('conference_name', '')
+            st.session_state.conference_idx = llamada_data.get('conference_idx', 0)
+            st.session_state.t_inicio_dt = datetime.fromisoformat(llamada_data['t_inicio_dt'])
+            st.session_state.agente_id = llamada_data['agente_id']
+            st.session_state.webrtc_activo = llamada_data.get('webrtc_activo', False)
+            st.session_state.webrtc_numero = llamada_data.get('webrtc_numero', '')
+            st.session_state.webrtc_nombre = llamada_data.get('webrtc_nombre', '')
+            st.session_state.webrtc_idx = llamada_data.get('webrtc_idx', 0)
+            
+            print(f"[PERSISTENCE] ✅ Llamada activa restaurada exitosamente")
+            return True
+        else:
+            print(f"[PERSISTENCE] Llamada {llamada_sid} ya no está activa en Twilio")
+            # Limpiar cookie
+            limpiar_cookie_llamada_activa()
+    else:
+        print(f"[PERSISTENCE] No se encontraron datos de llamada activa")
+    
+    return False
+
+def limpiar_cookie_llamada_activa():
+    """Limpia la cookie de llamada activa"""
+    cookie_script = """
+    <script>
+    document.cookie = 'llamada_activa=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    console.log('Cookie de llamada activa limpiada');
+    </script>
+    """
+    st.components.v1.html(cookie_script, height=0)
+    print(f"[PERSISTENCE] Cookie de llamada activa limpiada")
 
 # --- SISTEMA DE SANITIZACIÓN Y SEGURIDAD ---
 def sanitizar_nota(nota):
@@ -2067,7 +2190,6 @@ if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa
 if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
 if 'draft_notas' not in st.session_state: st.session_state.draft_notas = {}
 if 'meta_diaria' not in st.session_state: st.session_state.meta_diaria = 50
-if 'llamada_activa_sid' not in st.session_state: st.session_state.llamada_activa_sid = None
 if 't_inicio_dt' not in st.session_state: st.session_state.t_inicio_dt = None
 if 'grabacion_pausada' not in st.session_state: st.session_state.grabacion_pausada = False
 if 'pagina_actual' not in st.session_state: st.session_state.pagina_actual = 0
@@ -2079,6 +2201,20 @@ if 'pausa_inicio' not in st.session_state: st.session_state.pausa_inicio = None
 if 'usuario_interactuando' not in st.session_state: st.session_state.usuario_interactuando = False
 if 'ultima_interaccion' not in st.session_state: st.session_state.ultima_interaccion = time.time()
 if 'refresh_pausado' not in st.session_state: st.session_state.refresh_pausado = False
+
+# ✅ RECUPERACIÓN AUTOMÁTICA DE LLAMADAS ACTIVAS AL RECARGAR PÁGINA
+if st.session_state.agente_id and not st.session_state.llamada_activa_sid and not st.session_state.webrtc_activo:
+    print(f"[PERSISTENCE] Agente {st.session_state.agente_id} logueado, verificando llamadas activas...")
+    if restaurar_llamada_activa():
+        st.success("🔄 ⚠️ ¡LLAMADA ACTIVA RECUPERADA!")
+        st.warning("La página se recargó pero había una llamada en curso. El estado ha sido restaurado.")
+        st.info("Puedes continuar gestionando la llamada normalmente.")
+        
+        # Forzar rerun para mostrar la llamada activa
+        time.sleep(2)
+        st.rerun()
+    else:
+        print(f"[PERSISTENCE] No hay llamadas activas para restaurar")
 if 'ultimo_refresh_llamada' not in st.session_state: st.session_state.ultimo_refresh_llamada = 0
 if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
 if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = None
@@ -3249,7 +3385,14 @@ with tab_op:
                         llamada_activa = st.session_state.llamada_activa_sid is not None or st.session_state.webrtc_activo
                         
                         if not llamada_activa:
-                            # Botón único de llamada con Conference Call (ACTIVO)
+                            # 🎛️ PANEL DE BOTONES DE LLAMADA
+                            st.markdown("""
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; border: 2px solid #dee2e6; margin-bottom: 15px;">
+                                <h4 style="margin: 0 0 10px 0; color: #495057;">🎛️ Opciones de Llamada</h4>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Botón principal: Conference Call
                             if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
                                 try:
                                     # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
@@ -3337,95 +3480,18 @@ with tab_op:
                                     st.session_state.conference_idx = idx
                                     st.session_state.t_inicio_dt = datetime.now()
                                     
+                                    # ✅ GUARDAR ESTADO EN COOKIES PARA RECUPERACIÓN
+                                    guardar_llamada_activa_en_cookie()
+                                    
                                     print(f"[DEBUG] Conference Call iniciada exitosamente")
                                     add_log(f"CONFERENCE_CALL_SUCCESS - Cliente: {tel} - Caller ID: {numero_agente}", "TWILIO")
-                                    
-                                    add_log(f"CONFERENCE_CALL_START: {c['nombre']} - Agente: {call_agente.sid}, Cliente: {call_cliente.sid}", "TWILIO")
-                                    add_log(f"CALLER_ID_CONFIGURED - Agente: {numero_agente} - Cliente: {tel}", "DEBUG")
                                     
                                     st.success(f"✅ Conference Call iniciada exitosamente")
                                     st.info(f"📞 Agente: Recibirás llamada de {twilio_number}")
                                     st.info(f"📱 Cliente: Verá tu número {numero_agente}")
                                     
-                                    # 🔍 VERIFICACIÓN VISUAL PARA EL USUARIO
-                                    if '+1' in str(numero_agente):
-                                        st.error(f"⚠️ ADVERTENCIA: El número configurado todavía contiene +1")
-                                        st.error(f"⚠️ Esto puede causar que el cliente vea: +1 57xxx")
-                                    else:
-                                        st.success(f"✅ Caller ID configurado correctamente: {numero_agente}")
-                                        st.success(f"✅ El cliente verá solo tu número local")
-                                    
-                                    # 🎧 RECOMENDACIONES DE AUDIO PARA TABLET
-                                    with st.expander("🎧 Recomendaciones de Audio (Tablet)", expanded=False):
-                                        st.markdown("""
-                                        ### 🎧 **OPTIMIZACIÓN DE AUDIO PARA TABLET**
-                                        
-                                        #### **📱 PROBLEMAS COMUNES:**
-                                        - ❌ Audio cortado o entrecortado
-                                        - ❌ Eco o retroalimentación
-                                        - ❌ El cliente no escucha bien
-                                        - ❌ Se escucha distante o metálico
-                                        
-                                        #### **🎧 SOLUCIONES RECOMENDADAS:**
-                                            
-                                            **OPCIÓN 1: AUDÍFONOS (RECOMENDADO)** ✅
-                                            - 🎧 Usar audífonos con micrófono
-                                            - 📱 Conectar por Bluetooth o cable
-                                            - 🔊 Elimina eco y retroalimentación
-                                            - 🎯 Mejor calidad de sonido
-                                            
-                                            **OPCIÓN 2: CONFIGURACIÓN TABLET** ⚙️
-                                            - 📱 Subir volumen al 80% (no 100%)
-                                            - 🎯 Mantener tablet a 30cm de la boca
-                                            - 🏠 Usar en lugar tranquilo sin eco
-                                            - 📵 WiFi estable y cerca del router
-                                            
-                                            **OPCIÓN 3: POSICIÓN ÓPTIMA** 📐
-                                            - 📱 Ángulo de 45 grados hacia la boca
-                                            - 🎯 No cubrir el micrófono con la mano
-                                            - 🏠 Superficie estable (no sostener en mano)
-                                            - 📵 Evitar mover la tablet durante llamada
-                                            
-                                            #### **🔧 SI SIGUE CON PROBLEMAS:**
-                                            1. 🎧 **Probar con audífonos** (solución más efectiva)
-                                            2. 📱 **Reiniciar la tablet** antes de iniciar
-                                            3. 📵 **Verificar conexión WiFi** (mínimo 3MB estable)
-                                            4. 🎯 **Cerrar otras aplicaciones** en la tablet
-                                            5. 📱 **Actualizar sistema operativo** de la tablet
-                                            
-                                            #### **✅ MEJOR PRÁCTICA:**
-                                            **Recomendamos usar audífonos con micrófono para calidad profesional.**
-                                            """)
-                                        
-                                        st.balloons()  # Celebración exitosa
-                                        
-                                        # 🔍 MOSTRAR INFORMACIÓN DE DEBUG (Detallado para Caller ID)
-                                        with st.expander("🔍 Debug Info - Conference Call", expanded=False):
-                                            debug_info = f"""
-                                            📞 Llamada al Cliente: {tel}
-                                            📱 Caller ID Configurado: {numero_agente}
-                                            🆔 SID Cliente: {call_cliente.sid}
-                                            🆔 SID Agente: {call_agente.sid}
-                                            🏷️ Conferencia: {conference_name}
-                                            
-                                            🔍 ANÁLISIS CALLER ID:
-                                            - Longitud: {len(str(numero_agente))} caracteres
-                                            - Empieza con +57: {str(numero_agente).startswith('+57')}
-                                            - Contiene +1: {'+1' in str(numero_agente)}
-                                            - Formato final: {numero_agente}
-                                            
-                                            ✅ RESULTADO ESPERADO:
-                                            - Cliente verá: {numero_agente.replace('+57', '') if numero_agente.startswith('+57') else numero_agente}
-                                            - Agente verá: {twilio_number}
-                                            """
-                                            st.code(debug_info)
-                                        
-                                        # 🔍 ADVERTENCIA si se detecta el número problemático
-                                        if "57322870205" in str(numero_agente):
-                                            st.error("⚠️ ALERTA: Se está usando el número 57322870205 que ha causado problemas")
-                                            st.error("⚠️ Verifica la configuración en secrets.toml")
-                                        time.sleep(1)
-                                        st.rerun()
+                                    time.sleep(1)
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"❌ Error al iniciar llamada: {e}")
                                     print(f"[ERROR] Error en conference call: {e}")
@@ -3438,7 +3504,6 @@ with tab_op:
                                     # Limpiar estado parcial si algo falló
                                     if 'llamada_activa_sid' in st.session_state and st.session_state.llamada_activa_sid:
                                         try:
-                                            # Intentar colgar la llamada si se inició parcialmente
                                             client.calls(st.session_state.llamada_activa_sid).update(status='completed')
                                             print(f"[DEBUG] Llamada parcial colgada por error")
                                         except:
@@ -3449,190 +3514,184 @@ with tab_op:
                                             st.session_state.conference_name = None
                                     
                                     st.warning("🔄 Estado limpiado. Intenta nuevamente.")
-                                    
-                                    # Mostrar información de depuración
-                                    with st.expander("🔍 Debug Info - Error", expanded=True):
-                                        st.code(f"""
-                                        Error: {e}
-                                        Contacto: {c.get('nombre', 'N/A')} - {tel}
-                                        Índice: {idx}
-                                        Total contactos: {len(st.session_state.df_contactos)}
-                                        Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                                        """)
-                                # ============================================================
-                                # BOTÓN ALTERNATIVO: WebRTC (HABILITADO)
-                                # ============================================================
+                            
+                            # Botón alternativo: WebRTC
+                            st.markdown("---")
+                            st.markdown("**Opción alternativa:**")
+                            if st.button("🎧 LLAMAR (WebRTC)", width='stretch', key=f"call_webrtc_{idx}"):
+                                # Marcar WebRTC como activo y guardar datos
+                                st.session_state.webrtc_activo = True
+                                st.session_state.webrtc_numero = tel
+                                st.session_state.webrtc_nombre = c['nombre']
+                                st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
+                                st.session_state.t_inicio_dt = datetime.now()
                                 
-                                # --- OPCIÓN 1: Botón Server-Side (COMENTADO - No sirve para audio bidireccional) ---
-                                # if st.button("📞 LLAMAR (Server)", use_container_width=True, key=f"call_server_{idx}"):
-                                #     try:
-                                #         call = client.calls.create(
-                                #             url=function_url, 
-                                #             to=tel, 
-                                #             from_=twilio_number, 
-                                #             machine_detection='Enable', 
-                                #             record=True
-                                #         )
-                                #         st.session_state.llamada_activa_sid = call.sid
-                                #         st.session_state.t_inicio_dt = datetime.now()
-                                #         add_log(f"CALL_START_SERVER: {c['nombre']}", "TWILIO")
-                                #         st.rerun()
-                                #     except Exception as e:
-                                #         st.error(f"Error al iniciar llamada: {e}")
+                                # ✅ GUARDAR ESTADO EN COOKIES PARA RECUPERACIÓN
+                                guardar_llamada_activa_en_cookie()
                                 
-                                # --- OPCIÓN 2: Botón WebRTC (Llamada desde navegador) - HABILITADO ---
-                                if st.button("🎧 LLAMAR (WebRTC)", width='stretch', key=f"call_webrtc_{idx}"):
-                                    # Marcar WebRTC como activo y guardar datos
-                                    st.session_state.webrtc_activo = True
-                                    st.session_state.webrtc_numero = tel
-                                    st.session_state.webrtc_nombre = c['nombre']
-                                    st.session_state.webrtc_idx = idx  # Guardar el índice del contacto activo
-                                    st.session_state.t_inicio_dt = datetime.now()
-                                    add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
-                                    st.rerun()
-                            else:
-                                # --- MONITOR DINÁMICO ---
+                                add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
+                                st.rerun()
+                            
+                            # Información sobre las opciones
+                            with st.expander("📋 Información sobre opciones de llamada", expanded=False):
+                                st.markdown("""
+                                ### 📞 **Conference Call (Recomendado)**
+                                - ✅ Llama desde tu celular/tablet
+                                - ✅ Mejor calidad de audio
+                                - ✅ Puedes moverte libremente
+                                - ✅ Grabación automática
                                 
-                                # Verificar si es llamada WebRTC Y si este es el contacto activo
-                                if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
-                                    # Monitor para WebRTC
-                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                    minutos = tiempo_transcurrido // 60
-                                    segundos = tiempo_transcurrido % 60
-                                    st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
-                                    st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
-                                    
-                                    # Buscar el SID de llamada WebRTC si no lo tenemos
-                                    if st.session_state.webrtc_call_sid is None:
-                                        try:
-                                            # Buscar llamadas activas al número del cliente
-                                            calls = client.calls.list(
-                                                to=tel,
-                                                status='in-progress',
-                                                limit=1
-                                            )
-                                            if calls:
-                                                st.session_state.webrtc_call_sid = calls[0].sid
-                                                # Actualizar el tiempo de inicio cuando la llamada realmente se conecta
-                                                st.session_state.t_inicio_dt = datetime.now()
-                                                print(f"[DEBUG] WebRTC Call SID encontrado: {calls[0].sid}")
-                                                st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
-                                        except Exception as e:
-                                            print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
-                                    
-                                    # Verificar si la llamada sigue activa en Twilio
-                                    call_ended_by_remote = False
-                                    webrtc_final_status = 'Llamado'  # Por defecto
-                                    
-                                    if st.session_state.webrtc_call_sid:
-                                        try:
-                                            remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
-                                            print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
+                                ### 🎧 **WebRTC (Alternativa)**
+                                - 📱 Llama desde el navegador
+                                - 🔊 Usa micrófono y altavoces de la computadora
+                                - 📡 Requiere conexión estable a internet
+                                - 🎯 Bueno para pruebas rápidas
+                                """)
+                            
+                            # ============================================================
+                        # MONITOR DINÁMICO CUANDO HAY LLAMADA ACTIVA
+                        # ============================================================
+                        else:
+                            # --- MONITOR PARA WEBRTC ---
+                            if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
+                                # Monitor para WebRTC
+                                tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                minutos = tiempo_transcurrido // 60
+                                segundos = tiempo_transcurrido % 60
+                                st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
+                                st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
+                                
+                                # Buscar el SID de llamada WebRTC si no lo tenemos
+                                if st.session_state.webrtc_call_sid is None:
+                                    try:
+                                        # Buscar llamadas activas al número del cliente
+                                        calls = client.calls.list(
+                                            to=tel,
+                                            status='in-progress',
+                                            limit=1
+                                        )
+                                        if calls:
+                                            st.session_state.webrtc_call_sid = calls[0].sid
+                                            # Actualizar el tiempo de inicio cuando la llamada realmente se conecta
+                                            st.session_state.t_inicio_dt = datetime.now()
+                                            print(f"[DEBUG] WebRTC Call SID encontrado: {calls[0].sid}")
+                                            st.success(f"🔗 Llamada conectada: {calls[0].sid[:8]}...")
+                                    except Exception as e:
+                                        print(f"[ERROR] Error buscando SID de llamada WebRTC: {e}")
+                                
+                                # Verificar si la llamada sigue activa en Twilio
+                                call_ended_by_remote = False
+                                webrtc_final_status = 'Llamado'  # Por defecto
+                                
+                                if st.session_state.webrtc_call_sid:
+                                    try:
+                                        remote_call = client.calls(st.session_state.webrtc_call_sid).fetch()
+                                        print(f"[DEBUG] WebRTC - Estado Twilio: {remote_call.status}")
+                                        
+                                        # Si la llamada terminó, determinar el estado final
+                                        if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
+                                            call_ended_by_remote = True
                                             
-                                            # Si la llamada terminó, determinar el estado final
-                                            if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
-                                                call_ended_by_remote = True
-                                                
-                                                # Obtener datos de la llamada para clasificación
-                                                answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
-                                                duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
-                                                error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
-                                                print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
-                                                
-                                                # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
-                                                
-                                                # PRIORIDAD ALTA 1: Número inválido/inexistente (códigos ampliados)
-                                                if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
-                                                    webrtc_final_status = 'No Contesto'
-                                                    st.error(f"❌ Número inválido o inexistente (error {error_code})")
-                                                    print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
-                                                
-                                                # PRIORIDAD MEDIA 1: Número bloqueado/spam/no entregado
-                                                elif remote_call.status == 'failed' and error_code in ['21610', '30006', '30004']:
-                                                    webrtc_final_status = 'No Contesto'
-                                                    st.error(f"🚫 Número bloqueado, spam o mensaje no entregado (error {error_code})")
-                                                    print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado/no entregado: {error_code}")
-                                                
-                                                # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
-                                                elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
-                                                    webrtc_final_status = 'No Contesto'
-                                                    st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
-                                                    print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
-                                                
-                                                # Estados intermedios - Llamada en progreso
-                                                elif remote_call.status in ['in-progress', 'queued', 'ringing']:
-                                                    webrtc_final_status = 'Llamado'  # Asumimos que está en progreso
-                                                    st.info(f"📞 Llamada en progreso: {remote_call.status}")
-                                                    print(f"[DEBUG] Clasificado como Llamado - Estado intermedio: {remote_call.status}")
-                                                
-                                                # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
-                                                elif remote_call.status in ['no-answer', 'busy', 'canceled']:
-                                                    webrtc_final_status = 'No Contesto'
-                                                    st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
-                                                    print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
-                                                
-                                                # Caso 2: Fallo genérico
-                                                elif remote_call.status == 'failed':
-                                                    webrtc_final_status = 'No Contesto'
-                                                    st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
-                                                    print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
-                                                
-                                                # PRIORIDAD ALTA 3: Buzón de voz mejorado (detección ampliada)
-                                                elif answered_by in ['machine_start', 'machine_end_beep', 'machine_end_silence', 'fax']:
-                                                    if duracion_twilio < 5:
-                                                        webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s) - Tipo: {answered_by}")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno - Tipo: {answered_by}")
-                                                    else:
-                                                        webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz - Tipo: {answered_by}")
-                                                
-                                                # Caso 3: Contestó una persona (humano) - Validación de duración
-                                                elif answered_by == 'human':
-                                                    if duracion_twilio >= 300:  # 5 minutos o más
-                                                        st.info(f"📞 Conversación larga detectada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
-                                                        print(f"[DEBUG] Conversación larga: {duracion_twilio}s")
-                                                    webrtc_final_status = 'Llamado'
-                                                    st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
-                                                    print(f"[DEBUG] Clasificado como Llamado por humano - Duración: {duracion_twilio}s")
-                                                
-                                                # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
-                                                elif remote_call.status == 'completed' and answered_by == 'unknown':
-                                                    if duracion_twilio == 0:
-                                                        webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"⚠️ Llamada sin conexión (0s)")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Sin conexión")
-                                                    elif 0 < duracion_twilio < 3:
-                                                        webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
-                                                        print(f"[DEBUG] Clasificado como No Contesto - Rechazó inmediatamente: {duracion_twilio}s")
-                                                    elif 3 <= duracion_twilio < 10:
-                                                        webrtc_final_status = 'No Contesto'
-                                                        st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
-                                                        print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
-                                                    elif duracion_twilio == 10:
-                                                        webrtc_final_status = 'Llamado'
-                                                        st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
-                                                        print(f"[DEBUG] Clasificado como Llamado - Duración límite exacto: 10s")
-                                                    elif duracion_twilio >= 300:  # 5 minutos o más
-                                                        webrtc_final_status = 'Llamado'
-                                                        st.success(f"✅ Conversación larga ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
-                                                        print(f"[DEBUG] Clasificado como Llamado - Conversación larga: {duracion_twilio}s")
-                                                    else:
-                                                        webrtc_final_status = 'Llamado'
-                                                        st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
-                                                        print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
-                                                
-                                                # Caso por defecto
-                                                else:
-                                                    webrtc_final_status = 'Llamado'
-                                                    st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
-                                                    print(f"[DEBUG] Clasificado como Llamado por defecto")
-                                                
-                                                print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
-                                        except Exception as e:
-                                            print(f"[ERROR] Error verificando estado WebRTC: {e}")
+                                            # Obtener datos de la llamada para clasificación
+                                            answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
+                                            duracion_twilio = int(remote_call.duration) if remote_call.duration else 0
+                                            error_code = str(remote_call.error_code) if hasattr(remote_call, 'error_code') and remote_call.error_code else None
+                                            print(f"[DEBUG] WebRTC - answered_by: {answered_by}, status: {remote_call.status}, duration: {duracion_twilio}s, error_code: {error_code}")
+                                            
+                                            # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS
+                                            
+                                            # PRIORIDAD ALTA 1: Número inválido/inexistente (códigos ampliados)
+                                            if remote_call.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.error(f"❌ Número inválido o inexistente (error {error_code})")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Número inválido: {error_code}")
+                                            
+                                            # PRIORIDAD MEDIA 1: Número bloqueado/spam/no entregado
+                                            elif remote_call.status == 'failed' and error_code in ['21610', '30006', '30004']:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.error(f"🚫 Número bloqueado, spam o mensaje no entregado (error {error_code})")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Número bloqueado/no entregado: {error_code}")
+                                            
+                                            # PRIORIDAD MEDIA 2: Error de red (podría reintentar)
+                                        elif remote_call.status == 'failed' and error_code in ['31005', '31002', '31003', '31009']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Error de red - Considerar reintento (error {error_code})")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Error de red: {error_code}")
+                                        
+                                        # Estados intermedios - Llamada en progreso
+                                        elif remote_call.status in ['in-progress', 'queued', 'ringing']:
+                                            webrtc_final_status = 'Llamado'  # Asumimos que está en progreso
+                                            st.info(f"📞 Llamada en progreso: {remote_call.status}")
+                                            print(f"[DEBUG] Clasificado como Llamado - Estado intermedio: {remote_call.status}")
+                                        
+                                        # Caso 1: Celular apagado, ocupado, falló o cancelado (sin error_code específico)
+                                        elif remote_call.status in ['no-answer', 'busy', 'canceled']:
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Llamada no contestada: {remote_call.status}")
+                                            print(f"[DEBUG] Clasificado como No Contesto por status: {remote_call.status}")
+                                        
+                                        # Caso 2: Fallo genérico
+                                        elif remote_call.status == 'failed':
+                                            webrtc_final_status = 'No Contesto'
+                                            st.warning(f"⚠️ Llamada falló: error {error_code or 'desconocido'}")
+                                            print(f"[DEBUG] Clasificado como No Contesto - Fallo genérico")
+                                        
+                                        # PRIORIDAD ALTA 3: Buzón de voz mejorado (detección ampliada)
+                                        elif answered_by in ['machine_start', 'machine_end_beep', 'machine_end_silence', 'fax']:
+                                            if duracion_twilio < 5:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"📞 Buzón lleno o no dejó mensaje ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón lleno - Tipo: {answered_by}")
+                                            else:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"📞 Contestó buzón de voz ({duracion_twilio}s) - Tipo: {answered_by}")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Buzón de voz - Tipo: {answered_by}")
+                                        
+                                        # Caso 3: Contestó una persona (humano) - Validación de duración
+                                        elif answered_by == 'human':
+                                            if duracion_twilio >= 300:  # 5 minutos o más
+                                                st.info(f"📞 Conversación larga detectada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                print(f"[DEBUG] Conversación larga: {duracion_twilio}s")
+                                            webrtc_final_status = 'Llamado'
+                                            st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
+                                            print(f"[DEBUG] Clasificado como Llamado por humano - Duración: {duracion_twilio}s")
+                                        
+                                        # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
+                                        elif remote_call.status == 'completed' and answered_by == 'unknown':
+                                            if duracion_twilio == 0:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada sin conexión (0s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Sin conexión")
+                                            elif 0 < duracion_twilio < 3:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Cliente rechazó la llamada ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Clasificado como No Contesto - Rechazó inmediatamente: {duracion_twilio}s")
+                                            elif 3 <= duracion_twilio < 10:
+                                                webrtc_final_status = 'No Contesto'
+                                                st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
+                                                print(f"[DEBUG] Clasificado como No Contesto por duración corta: {duracion_twilio}s")
+                                            elif duracion_twilio == 10:
+                                                webrtc_final_status = 'Llamado'
+                                                st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
+                                                print(f"[DEBUG] Clasificado como Llamado - Duración límite exacto: 10s")
+                                            elif duracion_twilio >= 300:  # 5 minutos o más
+                                                webrtc_final_status = 'Llamado'
+                                                st.success(f"✅ Conversación larga ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                print(f"[DEBUG] Clasificado como Llamado - Conversación larga: {duracion_twilio}s")
+                                            else:
+                                                webrtc_final_status = 'Llamado'
+                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
+                                                print(f"[DEBUG] Clasificado como Llamado por duración suficiente: {duracion_twilio}s")
+                                        
+                                        # Caso por defecto
+                                        else:
+                                            webrtc_final_status = 'Llamado'
+                                            st.info(f"ℹ️ Llamada terminada: {remote_call.status}")
+                                            print(f"[DEBUG] Clasificado como Llamado por defecto")
+                                        
+                                        print(f"[DEBUG] ✅ Estado final determinado: {webrtc_final_status}")
+                                    except Exception as e:
+                                        print(f"[ERROR] Error verificando estado WebRTC: {e}")
                                     
                                     # Botones en columnas (SIEMPRE mostrar durante llamada activa)
                                     finalizar_webrtc = False
@@ -3929,7 +3988,10 @@ with tab_op:
                                         st.session_state.webrtc_idx = None
                                         st.session_state.grabacion_pausada = False
                                         
-                                        st.success(" Llamada WebRTC finalizada - Pasando al siguiente contacto...")
+                                        # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                        limpiar_cookie_llamada_activa()
+                                        
+                                        st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
                                         time.sleep(2)
                                         st.rerun()
                                     else:
@@ -4437,6 +4499,10 @@ with tab_op:
                                         st.session_state.conference_idx = None
                                         st.session_state.grabacion_pausada = False
                                         st.session_state.finalizacion_manual_agente = False  # Limpiar variable
+                                        
+                                        # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                        limpiar_cookie_llamada_activa()
+                                        
                                         time.sleep(2)
                                         st.rerun()
                                     
