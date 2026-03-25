@@ -3492,28 +3492,39 @@ with tab_op:
     search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
     
     # 🔥 FILTRO INTELIGENTE CORREGIDO SEGÚN ESTADOS REALES DEL SHEET
-    print(f"[DEBUG] Aplicando filtro para categoría: {opc}")
+    print(f"[DEBUG] 🔥🔥🔥 Aplicando filtro para categoría: {opc}")
+    print(f"[DEBUG] 🔥🔥🔥 f_est: {f_est}")
+    print(f"[DEBUG] 🔥🔥🔥 df shape: {df.shape}")
+    print(f"[DEBUG] 🔥🔥🔥 Estados únicos en df: {df['estado'].unique()}")
+    print(f"[DEBUG] 🔥🔥🔥 Conteo de estados: {df['estado'].value_counts().to_dict()}")
     
     if "Pendientes" in opc:
         # Pendientes = "Pendiente" o valores vacíos/NaN en campo estado
         df_work = df[(df['estado'] == 'Pendiente') | (df['estado'].isna()) | (df['estado'] == '')]
-        print(f"[DEBUG] Filtro Pendientes (Pendiente/vacío/NaN) aplicado - Resultados: {len(df_work)}")
+        print(f"[DEBUG] 🔥🔥🔥 Filtro Pendientes (Pendiente/vacío/NaN) aplicado - Resultados: {len(df_work)}")
     elif "Gestionadas" in opc:
         # Gestionadas = "Llamado" o "Gestionado" 
         df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
-        print(f"[DEBUG] Filtro Gestionadas (Llamado/Gestionado) aplicado - Resultados: {len(df_work)}")
+        print(f"[DEBUG] 🔥🔥🔥 Filtro Gestionadas (Llamado/Gestionado) aplicado - Resultados: {len(df_work)}")
     else:
         # Para Programadas y No Contestaron: filtro exacto
         # 🔥 CORRECCIÓN: Normalizar estado para comparación
+        print(f"[DEBUG] 🔥🔥🔥 Buscando estado exacto: '{f_est}'")
         df_work = df[df['estado'].str.strip() == f_est]
-        print(f"[DEBUG] Filtro {f_est} aplicado - Resultados: {len(df_work)}")
+        print(f"[DEBUG] 🔥🔥🔥 Filtro {f_est} aplicado - Resultados: {len(df_work)}")
         
         # Si no hay resultados, intentar sin strip
         if df_work.empty:
             df_work = df[df['estado'] == f_est]
-            print(f"[DEBUG] Filtro sin strip - Resultados: {len(df_work)}")
+            print(f"[DEBUG] 🔥🔥🔥 Filtro sin strip - Resultados: {len(df_work)}")
+        
+        # Si sigue vacío, mostrar estados disponibles
+        if df_work.empty:
+            print(f"[DEBUG] 🔥🔥🔥 ESTADOS DISPONIBLES: {df['estado'].unique()}")
     
-    print(f"[DEBUG] df_work final tiene {len(df_work)} contactos")
+    print(f"[DEBUG] 🔥🔥🔥 df_work final tiene {len(df_work)} contactos")
+    if not df_work.empty:
+        print(f"[DEBUG] 🔥🔥🔥 Estados en df_work: {df_work['estado'].unique()}")
     
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
     # ✅ CORRECCIÓN: Limpiar estado activo de todos los contactos primero
