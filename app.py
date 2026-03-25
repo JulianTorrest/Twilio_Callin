@@ -3587,10 +3587,37 @@ with tab_op:
                 st.session_state.pagina_actual += 1
                 st.rerun()
         
+    # 🔥 CORRECCIÓN CRÍTICA: Mantener contacto activo visible aunque esté fuera de la página actual
+    contacto_activo_en_pagina = False
+    if contacto_activo_mostrado and idx_activo is not None:
+        # Verificar si el contacto activo está en el rango de la página actual
+        inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
+        fin = inicio + CONTACTOS_POR_PAGINA
+        
+        if idx_activo >= inicio and idx_activo < fin:
+            contacto_activo_en_pagina = True
+            print(f"[DEBUG] Contacto activo {idx_activo} está en página actual ({inicio}-{fin})")
+        else:
+            print(f"[DEBUG] Contacto activo {idx_activo} NO está en página actual ({inicio}-{fin}) - Se agregará manualmente")
+    
     # Obtener contactos de la página actual
     inicio = st.session_state.pagina_actual * CONTACTOS_POR_PAGINA
     fin = inicio + CONTACTOS_POR_PAGINA
     df_work = df_work.iloc[inicio:fin]
+    
+    # 🔥 ASEGURAR QUE EL CONTACTO ACTIVO SIEMPRE ESTÉ EN LA PAGINA ACTIVA
+    if contacto_activo_mostrado and idx_activo is not None and not contacto_activo_en_pagina:
+        # Agregar el contacto activo a la página actual si no está
+        if idx_activo < len(df):
+            contacto_activo_data = df.iloc[[idx_activo]].copy()
+            # Marcar como activo
+            contacto_activo_data['activo_en_conference'] = True
+            
+            # Agregar al df_work
+            df_work = pd.concat([df_work, contacto_activo_data], ignore_index=False)
+            print(f"[DEBUG] Contacto activo {idx_activo} agregado manualmente a la página actual")
+        else:
+            print(f"[WARNING] Contacto activo {idx_activo} fuera de rango del DataFrame principal")
 
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
     contacto_activo_mostrado = False
@@ -3874,8 +3901,12 @@ with tab_op:
                                     st.info(f"📞 Agente: Recibirás llamada de {twilio_number}")
                                     st.info(f"📱 Cliente: Verá tu número {numero_agente}")
                                     
-                                    time.sleep(1)
-                                    st.rerun()
+                                    # 🔥 NO HACER RERUN INMEDIATO - Esperar a que el usuario actualice la página manualmente
+                                    # Esto evita que el contacto desaparezca
+                                    st.info("🔄 La página se actualizará automáticamente en unos segundos...")
+                                    
+                                    # Pequeña espera para que el usuario vea los mensajes
+                                    time.sleep(2)
                                 except Exception as e:
                                     st.error(f"❌ Error al iniciar llamada: {e}")
                                     print(f"[ERROR] Error en conference call: {e}")
