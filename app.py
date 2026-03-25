@@ -3593,13 +3593,15 @@ with tab_op:
         with col_pag1:
             if st.button("⬅️ Anterior", disabled=st.session_state.pagina_actual == 0):
                 st.session_state.pagina_actual -= 1
-                st.rerun()
+                # 🔥 ELIMINAR RERUN - Evitar problemas con el contacto activo
+                print(f"[DEBUG] 🔥🔥🔥 Página anterior SIN rerun")
         with col_pag2:
             st.write(f"**Página {st.session_state.pagina_actual + 1} de {total_paginas}** ({total_contactos} contactos)")
         with col_pag3:
             if st.button("Siguiente ➡️", disabled=st.session_state.pagina_actual >= total_paginas - 1):
                 st.session_state.pagina_actual += 1
-                st.rerun()
+                # 🔥 ELIMINAR RERUN - Evitar problemas con el contacto activo
+                print(f"[DEBUG] 🔥🔥🔥 Página siguiente SIN rerun")
         
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
     contacto_activo_mostrado = False
@@ -3927,8 +3929,9 @@ with tab_op:
                                     # Esto evita que el contacto desaparezca
                                     st.info("🔄 La página se actualizará automáticamente en unos segundos...")
                                     
-                                    # Pequeña espera para que el usuario vea los mensajes
-                                    time.sleep(2)
+                                    # 🔥 ELIMINAR RERUN - NO FORZAR ACTUALIZACIÓN QUE CAUSA DESAPARICIÓN
+                                    # El usuario verá los mensajes y la llamada se iniciará sin desaparecer
+                                    print(f"[DEBUG] 🔥🔥🔥 Conference Call iniciada SIN rerun para evitar desaparición")
                                 except Exception as e:
                                     st.error(f"❌ Error al iniciar llamada: {e}")
                                     print(f"[ERROR] Error en conference call: {e}")
@@ -3967,7 +3970,8 @@ with tab_op:
                                 guardar_llamada_activa_en_cookie()
                                 
                                 add_log(f"WEBRTC_START: {c['nombre']} - {tel}", "TWILIO")
-                                st.rerun()
+                                # 🔥 ELIMINAR RERUN - Evitar desaparición del usuario
+                                print(f"[DEBUG] 🔥🔥🔥 WebRTC iniciado SIN rerun para evitar desaparición")
                             
                             # Información sobre las opciones
                             with st.expander("📋 Información sobre opciones de llamada", expanded=False):
@@ -4043,7 +4047,8 @@ with tab_op:
                                 if st.button("📅 Reprogramar", key=f"prog_{idx}", width='stretch'):
                                     # Activar el diálogo de reprogramación
                                     st.session_state[reprogramar_dialogo_key] = True
-                                    st.rerun()
+                                    # 🔥 ELIMINAR RERUN - Evitar desaparición del contacto
+                                    print(f"[DEBUG] 🔥🔥🔥 Reprogramar diálogo activado SIN rerun")
                                 
                                 # Mostrar diálogo de reprogramación si está activo
                                 if st.session_state.get(reprogramar_dialogo_key, False):
@@ -4062,7 +4067,8 @@ with tab_op:
                                     with col_prog_cancel:
                                         if st.button("❌ Cancelar", key=f"cancel_prog_{idx}"):
                                             st.session_state[reprogramar_dialogo_key] = False
-                                            st.rerun()
+                                            # 🔥 ELIMINAR RERUN - Evitar desaparición del contacto
+                                            print(f"[DEBUG] 🔥🔥🔥 Reprogramar cancelado SIN rerun")
                                     
                                     with col_prog_confirm:
                                         if st.button("✅ Confirmar Programación", key=f"confirm_prog_{idx}", type="primary"):
@@ -4086,10 +4092,10 @@ with tab_op:
                                             else:
                                                 st.success(f"✅ Llamada programada localmente para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
                                             
-                                            # Cerrar diálogo y hacer rerun
+                                            # Cerrar diálogo SIN rerun para evitar desaparición
                                             st.session_state[reprogramar_dialogo_key] = False
-                                            time.sleep(1)
-                                            st.rerun()
+                                            # 🔥 ELIMINAR RERUN - Evitar desaparición del contacto
+                                            print(f"[DEBUG] 🔥🔥🔥 Reprogramación confirmada SIN rerun")
                             
                             # ============================================================
                         # MONITOR DINÁMICO CUANDO HAY LLAMADA ACTIVA
