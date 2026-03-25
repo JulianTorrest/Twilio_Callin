@@ -3382,6 +3382,7 @@ with tab_marcador:
                         
                 else:
                     # 🔥 MOSTRAR CONTADOR DE TIEMPO Y BOTONES DE CONTROL (DESDE QUE ACEPTA)
+                    datos = st.session_state.marcador_datos
                     hora_bogota = obtener_hora_bogota()
                     tiempo_transcurrido = int((hora_bogota - datos['inicio']).total_seconds())
                     
