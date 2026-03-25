@@ -3094,6 +3094,83 @@ with tab_marcador:
     if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
         monitorear_y_guardar_marcador()
     
+    # 🔥 MONITOREO AUTOMÁTICO DE LLAMADAS PRINCIPALES (CRÍTICO)
+    # Verificar si hay una llamada activa principal que necesita ser monitoreada
+    if st.session_state.llamada_activa_sid is not None:
+        try:
+            # 🔥 VERIFICAR ESTADO REAL EN TWILIO
+            llamada_activa = client.calls(st.session_state.llamada_activa_sid).fetch()
+            print(f"[DEBUG] 🔥🔥🔥 Monitoreo llamada activa - Estado real: {llamada_activa.status}")
+            
+            # 🔥 SI LA LLAMADA TERMINÓ EN REALIDAD, LIMPIAR ESTADO
+            if llamada_activa.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
+                print(f"[DEBUG] 🔥🔥🔥 Llamada terminada detectada - Limpiando estado local")
+                print(f"[DEBUG] 🔥🔥🔥 Estado anterior: {st.session_state.llamada_activa_sid}")
+                
+                # 🔥 CLASIFICACIÓN Y GUARDADO AUTOMÁTICO
+                if hasattr(llamada_activa, 'end_time') and hasattr(llamada_activa, 'start_time'):
+                    duracion = (datetime.fromisoformat(llamada_activa.end_time.replace('Z', '+00:00')) - 
+                               datetime.fromisoformat(llamada_activa.start_time.replace('Z', '+00:00'))).total_seconds()
+                else:
+                    duracion = 0
+                
+                # Determinar estado final
+                if llamada_activa.status == 'completed' and duracion > 10:
+                    estado_final = 'Llamado'
+                elif llamada_activa.status == 'completed':
+                    estado_final = 'No Contesto'
+                else:
+                    estado_final = llamada_activa.status.capitalize()
+                
+                print(f"[DEBUG] 🔥🔥🔥 Clasificación automática: {estado_final} - Duración: {duracion}s")
+                
+                # 🔥 GUARDAR EN SHEETS SI HAY DATOS
+                if 'conference_idx' in st.session_state and st.session_state.conference_idx is not None:
+                    try:
+                        idx = st.session_state.conference_idx
+                        if st.session_state.df_contactos is not None and idx < len(st.session_state.df_contactos):
+                            # Actualizar estado local
+                            st.session_state.df_contactos.at[idx, 'estado'] = estado_final
+                            st.session_state.df_contactos.at[idx, 'duracion_seg'] = str(int(duracion))
+                            st.session_state.df_contactos.at[idx, 'fecha_llamada'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            # Guardar en sheets
+                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "MONITOREO_AUTO", contact_idx=idx):
+                                print(f"[DEBUG] 🔥🔥🔥 Guardado automático exitoso")
+                                add_log(f"MONITOREO_AUTO: Llamada terminada - {estado_final} - {duracion}s", "DATA")
+                            else:
+                                print(f"[DEBUG] 🔥🔥🔥 Error guardando automático")
+                    except Exception as e:
+                        print(f"[ERROR] Error en guardado automático: {e}")
+                
+                # 🔥 LIMPIAR ESTADO DE LLAMADA ACTIVA
+                st.session_state.llamada_activa_sid = None
+                if 'conference_idx' in st.session_state:
+                    st.session_state.conference_idx = None
+                if 'webrtc_activo' in st.session_state:
+                    st.session_state.webrtc_activo = False
+                if 'webrtc_numero' in st.session_state:
+                    st.session_state.webrtc_numero = None
+                if 'webrtc_nombre' in st.session_state:
+                    st.session_state.webrtc_nombre = None
+                if 'webrtc_idx' in st.session_state:
+                    st.session_state.webrtc_idx = None
+                if 't_inicio_dt' in st.session_state:
+                    st.session_state.t_inicio_dt = None
+                
+                print(f"[DEBUG] 🔥🔥🔥 Estado de llamada activa limpiado completamente")
+                st.success("✅ Llamada finalizada - Estado actualizado automáticamente")
+                
+            else:
+                # 🔥 LA LLAMADA SIGUE ACTIVA, MOSTRAR INFORMACIÓN
+                print(f"[DEBUG] 🔥🔥🔥 Llamada sigue activa - Estado: {llamada_activa.status}")
+                
+        except Exception as e:
+            print(f"[ERROR] Error monitoreando llamada activa: {e}")
+            # Si hay error, limpiar estado para evitar bloqueos
+            st.session_state.llamada_activa_sid = None
+            print(f"[DEBUG] 🔥🔥🔥 Estado limpiado por error de monitoreo")
+    
     col_marc1, col_marc2 = st.columns([1, 1])
     
     with col_marc1:
@@ -3117,29 +3194,228 @@ with tab_marcador:
         if st.session_state.marcador_call_sid is not None:
             st.warning("⚠️ Ya hay una llamada activa en el marcador")
             
-            # Monitorear llamada activa
+            # 🔥 MONITOR DINÁMICO PARA MARCADOR
             try:
                 marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
-                st.info(f"📊 Estado: {marcador_call.status}")
+                datos = st.session_state.marcador_datos
+                
+                # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
+                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                        <span style="font-size: 28px; margin-right: 15px;">📞</span>
+                        <strong style="font-size: 18px;">LLAMADA ACTIVA - MARCADOR</strong>
+                        <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
+                    </div>
+                    <div style="font-size: 16px;">
+                        <strong>👤 Contacto:</strong> {datos['nombre_completo']}<br>
+                        <strong>📱 Teléfono:</strong> {datos['numero_destino']}<br>
+                        <strong>🏗️ Constructura:</strong> {datos['constructura']}<br>
+                        <strong>🏙️ Municipio:</strong> {datos['municipio']}<br>
+                        <strong>📊 Estado:</strong> {marcador_call.status}<br>
+                        <strong>⏰ Inicio:</strong> {datos['inicio'].strftime('%H:%M:%S')}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 if marcador_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
-                    st.success(f"✅ Llamada finalizada: {marcador_call.status}")
-                    if st.button("🔄 Nueva Llamada", key="marcador_nueva"):
+                    # 🔥 CLASIFICACIÓN INTELIGENTE DEL RESULTADO (MEJORADA)
+                    if marcador_call.status == 'completed':
+                        if hasattr(marcador_call, 'end_time') and hasattr(marcador_call, 'start_time'):
+                            duracion = (datetime.fromisoformat(marcador_call.end_time.replace('Z', '+00:00')) - 
+                                       datetime.fromisoformat(marcador_call.start_time.replace('Z', '+00:00'))).total_seconds()
+                        else:
+                            duracion = 0
+                        
+                        # 🔥 CLASIFICACIÓN POR DURACIÓN (IGUAL QUE SISTEMA PRINCIPAL)
+                        if duracion == 0:
+                            resultado_final = 'No Contesto'
+                            st.warning(f"⚠️ Llamada sin conexión (0s)")
+                            print(f"[DEBUG] Marcador: Clasificado como No Contesto - Sin conexión")
+                            
+                        elif 0 < duracion < 3:
+                            resultado_final = 'No Contesto'
+                            st.warning(f"⚠️ Cliente rechazó la llamada ({duracion}s)")
+                            print(f"[DEBUG] Marcador: Clasificado como No Contesto - Rechazó inmediatamente: {duracion}s")
+                            
+                        elif 3 <= duracion < 10:
+                            resultado_final = 'No Contesto'
+                            st.warning(f"⚠️ Llamada muy corta ({duracion}s) - Probablemente no contestó")
+                            print(f"[DEBUG] Marcador: Clasificado como No Contesto por duración corta: {duracion}s")
+                            
+                        elif duracion == 10:
+                            resultado_final = 'Llamado'
+                            st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
+                            print(f"[DEBUG] Marcador: Clasificado como Llamado - Duración límite exacto: 10s")
+                            
+                        elif duracion >= 300:  # 5 minutos o más
+                            resultado_final = 'Llamado'
+                            st.success(f"✅ Conversación larga ({duracion}s = {duracion//60}min {duracion%60}s)")
+                            print(f"[DEBUG] Marcador: Clasificado como Llamado - Conversación larga: {duracion}s")
+                            
+                        else:
+                            resultado_final = 'Llamado'
+                            st.success(f"✅ Llamada completada ({duracion}s) - Conversación establecida")
+                            print(f"[DEBUG] Marcador: Clasificado como Llamado por duración suficiente: {duracion}s")
+                        
+                        # 🔥 DETECCIÓN ADICIONAL SEGÚN answered_by (SI ESTÁ DISPONIBLE)
+                        if hasattr(marcador_call, 'answered_by') and marcador_call.answered_by:
+                            answered_by = marcador_call.answered_by.lower()
+                            
+                            if answered_by == 'human':
+                                if duracion >= 300:  # 5 minutos o más
+                                    st.info(f"📞 Conversación larga detectada ({duracion}s = {duracion//60}min {duracion%60}s)")
+                                    print(f"[DEBUG] Marcador: Conversación larga: {duracion}s")
+                                resultado_final = 'Llamado'
+                                st.success(f"✅ Llamada contestada por persona ({duracion}s)")
+                                print(f"[DEBUG] Marcador: Clasificado como Llamado por humano - Duración: {duracion}s")
+                                
+                            elif answered_by == 'machine_start':
+                                resultado_final = 'No Contesto'
+                                st.warning(f"🤖 Contestó máquina (buzón de voz)")
+                                print(f"[DEBUG] Marcador: Contestó máquina al inicio")
+                                
+                            elif answered_by == 'machine_end_beep':
+                                resultado_final = 'No Contesto'
+                                st.warning(f"🤖 Contestó máquina (buzón con beep)")
+                                print(f"[DEBUG] Marcador: Contestó máquina al final")
+                        
+                        # 🔥 ESTADÍSTICAS ADICIONALES PARA LLAMADAS LARGAS
+                        if duracion >= 300:  # 5 minutos o más
+                            minutos = int(duracion // 60)
+                            segundos = int(duracion % 60)
+                            st.balloons()
+                            st.success(f"🎉 ¡Excelente conversación! {minutos} minutos y {segundos} segundos")
+                            
+                        elif duracion >= 120:  # 2 minutos o más
+                            minutos = int(duracion // 60)
+                            st.success(f"👍 Buena conversación de {minutos} minutos")
+                            
+                        elif duracion >= 60:  # 1 minuto o más
+                            st.info(f"💬 Conversación de {int(duracion)} segundos")
+                        
+                    else:
+                        # 🔥 CLASIFICACIÓN DE OTROS ESTADOS
+                        if marcador_call.status == 'no-answer':
+                            resultado_final = 'No Contesto'
+                            st.warning(f"📞 El cliente no contestó (timeout)")
+                            print(f"[DEBUG] Marcador: Clasificado como No Contesto - Timeout")
+                            
+                        elif marcador_call.status == 'busy':
+                            resultado_final = 'Ocupado'
+                            st.warning(f"📞 Línea ocupada")
+                            print(f"[DEBUG] Marcador: Clasificado como Ocupado")
+                            
+                        elif marcador_call.status == 'failed':
+                            resultado_final = 'No Contesto'
+                            st.error(f"📞 La llamada falló (posiblemente celular apagado)")
+                            print(f"[DEBUG] Marcador: Clasificado como No Contesto - Falló")
+                            
+                        elif marcador_call.status == 'canceled':
+                            resultado_final = 'Cancelado'
+                            st.info(f"📞 Llamada cancelada")
+                            print(f"[DEBUG] Marcador: Clasificado como Cancelado")
+                            
+                        else:
+                            resultado_final = marcador_call.status.capitalize()
+                            st.info(f"ℹ️ Llamada terminada: {marcador_call.status}")
+                            print(f"[DEBUG] Marcador: Estado por defecto: {marcador_call.status}")
+                    
+                    # 🔥 GUARDAR AUTOMÁTICAMENTE CUANDO TERMINA
+                    datos_guardar = datos.copy()
+                    datos_guardar['call_sid'] = st.session_state.marcador_call_sid
+                    
+                    # Guardar en todos los sheets
+                    exito_compartidos = guardar_marcador_en_sheets_compartidos(datos_guardar, int(duracion) if 'duracion' in locals() else 0, resultado_final, st.session_state.marcador_call_sid)
+                    exito_individual = guardar_marcador_en_sheet_agente(datos_guardar, int(duracion) if 'duracion' in locals() else 0, resultado_final)
+                    
+                    if exito_compartidos and exito_individual:
+                        st.success(f"✅ Información guardada en todos los sheets")
+                    elif exito_compartidos:
+                        st.success(f"✅ Información guardada en sheets compartidos")
+                    elif exito_individual:
+                        st.success(f"✅ Información guardada en sheet individual")
+                    else:
+                        st.error("❌ Error guardando en sheets")
+                    
+                    # Botón para nueva llamada
+                    if st.button("🔄 Nueva Llamada", key="marcador_nueva", type="primary"):
                         st.session_state.marcador_call_sid = None
                         st.session_state.marcador_datos = {}
                         # 🔥 SIN RERUN para evitar problemas
+                        
                 else:
-                    st.write("⏳ Llamada en curso...")
+                    # 🔥 MOSTRAR CONTADOR DE TIEMPO Y BOTONES DE CONTROL
+                    hora_bogota = obtener_hora_bogota()
+                    tiempo_transcurrido = int((hora_bogota - datos['inicio']).total_seconds())
                     
-                    # Botón para finalizar llamada manualmente
-                    if st.button("📞 Finalizar Llamada", key="marcador_finalizar"):
-                        try:
-                            client.calls(st.session_state.marcador_call_sid).update(status='completed')
-                            st.success("✅ Llamada finalizada manualmente")
-                            st.session_state.marcador_call_sid = None
-                            st.session_state.marcador_datos = {}
-                        except Exception as e:
-                            st.error(f"❌ Error finalizando llamada: {e}")
+                    # Formatear tiempo
+                    horas = tiempo_transcurrido // 3600
+                    minutos = (tiempo_transcurrido % 3600) // 60
+                    segundos = tiempo_transcurrido % 60
+                    tiempo_formateado = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+                    
+                    # Mostrar contador y estado
+                    col_tiempo, col_estado = st.columns([1, 2])
+                    with col_tiempo:
+                        st.metric("⏱️ Duración", tiempo_formateado)
+                    
+                    with col_estado:
+                        st.metric("📊 Estado", marcador_call.status.upper())
+                    
+                    # 🔥 BOTONES DE CONTROL DE LLAMADA
+                    st.markdown("#### 🎛️ Control de Llamada")
+                    
+                    col_btn1, col_btn2, col_btn3 = st.columns(3)
+                    
+                    with col_btn1:
+                        if st.button("📞 Finalizar Llamada", key="marcador_finalizar", type="primary"):
+                            try:
+                                client.calls(st.session_state.marcador_call_sid).update(status='completed')
+                                st.success("✅ Llamada finalizada manualmente")
+                                # El monitoreo detectará y guardará automáticamente
+                            except Exception as e:
+                                st.error(f"❌ Error finalizando llamada: {e}")
+                    
+                    with col_btn2:
+                        # Botón de pausa de grabación (simulado, ya que la grabación es automática)
+                        if st.button("⏸️ Pausar Grabación", key="marcador_pausar", disabled=True):
+                            st.info("ℹ️ La grabación es automática y no se puede pausar en Conference Call")
+                    
+                    with col_btn3:
+                        if st.button("🔄 Refrescar Estado", key="marcador_refrescar"):
+                            # Forzar verificación del estado
+                            pass  # El monitoreo se ejecutará automáticamente
+                    
+                    # 🔥 INFORMACIÓN ADICIONAL
+                    with st.expander("📋 Información técnica de la llamada", expanded=False):
+                        st.write(f"**Call SID:** {st.session_state.marcador_call_sid}")
+                        st.write(f"**From:** {marcador_call.from_}")
+                        st.write(f"**To:** {marcador_call.to}")
+                        st.write(f"**Direction:** {marcador_call.direction}")
+                        st.write(f"**Price:** ${marcador_call.price if marcador_call.price else '0.00'} {marcador_call.price_unit if marcador_call.price_unit else 'USD'}")
+                        if hasattr(marcador_call, 'answered_by') and marcador_call.answered_by:
+                            st.write(f"**Answered by:** {marcador_call.answered_by}")
+                    
+                    # 🔥 ESCENARIOS ESPECIALES - DETECCIÓN
+                    if marcador_call.status == 'no-answer':
+                        st.warning("📞 El cliente no contestó la llamada")
+                        
+                    elif marcador_call.status == 'busy':
+                        st.warning("📞 La línea del cliente está ocupada")
+                        
+                    elif marcador_call.status == 'failed':
+                        st.error("📞 La llamada falló (posiblemente celular apagado o sin cobertura)")
+                        
+                    elif marcador_call.status == 'ringing':
+                        st.info("📞 Sondeando... Esperando que el cliente conteste")
+                        
+                    elif marcador_call.status == 'in-progress':
+                        st.success("📞 Llamada en progreso - Conversación activa")
+                        
+                    elif marcador_call.status == 'queued':
+                        st.info("📞 Llamada en cola...")
+                        
             except Exception as e:
                 st.error(f"❌ Error verificando estado: {e}")
                 st.session_state.marcador_call_sid = None
@@ -3485,29 +3761,60 @@ def guardar_marcador_en_sheet_agente(datos_marcador, duracion_segundos, estado_f
         add_log(f"MARCADOR_ERROR_SHEET: {e}", "ERROR")
         return False
 
-# Función para monitorear y guardar cuando termina la llamada del marcador
+# Función para monitorear y guardar cuando termina la llamada del marcador (MEJORADA)
 def monitorear_y_guardar_marcador():
-    """Monitorea el estado de la llamada del marcador y guarda cuando termina"""
+    """Monitorea el estado de la llamada del marcador y guarda cuando termina - ROBUSTO"""
     if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
         try:
-            # Verificar estado de la llamada
+            # 🔥 VERIFICAR ESTADO REAL EN TWILIO (IGUAL QUE SISTEMA PRINCIPAL)
             marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
+            print(f"[DEBUG] 🔥🔥🔥 Marcador: Monitoreo llamada activa - Estado real: {marcador_call.status}")
             
             if marcador_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
-                # Calcular duración
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Llamada terminada detectada - Limpiando estado local")
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Estado anterior: {st.session_state.marcador_call_sid}")
+                
+                # 🔥 CLASIFICACIÓN INTELIGENTE (MEJORADA)
                 if marcador_call.status == 'completed' and hasattr(marcador_call, 'end_time') and hasattr(marcador_call, 'start_time'):
                     duracion = (datetime.fromisoformat(marcador_call.end_time.replace('Z', '+00:00')) - 
                                datetime.fromisoformat(marcador_call.start_time.replace('Z', '+00:00'))).total_seconds()
                 else:
                     duracion = 0
                 
-                # Determinar estado final
-                if marcador_call.status == 'completed' and duracion > 10:
-                    estado_final = 'Llamado'
-                elif marcador_call.status == 'completed':
+                # 🔥 CLASIFICACIÓN POR DURACIÓN (IGUAL QUE SISTEMA PRINCIPAL)
+                if duracion == 0:
                     estado_final = 'No Contesto'
+                    print(f"[DEBUG] Marcador: Clasificado como No Contesto - Sin conexión")
+                elif 0 < duracion < 3:
+                    estado_final = 'No Contesto'
+                    print(f"[DEBUG] Marcador: Clasificado como No Contesto - Rechazó inmediatamente: {duracion}s")
+                elif 3 <= duracion < 10:
+                    estado_final = 'No Contesto'
+                    print(f"[DEBUG] Marcador: Clasificado como No Contesto por duración corta: {duracion}s")
+                elif duracion == 10:
+                    estado_final = 'Llamado'
+                    print(f"[DEBUG] Marcador: Clasificado como Llamado - Duración límite exacto: 10s")
+                elif duracion >= 300:  # 5 minutos o más
+                    estado_final = 'Llamado'
+                    print(f"[DEBUG] Marcador: Clasificado como Llamado - Conversación larga: {duracion}s")
                 else:
-                    estado_final = marcador_call.status.capitalize()
+                    estado_final = 'Llamado'
+                    print(f"[DEBUG] Marcador: Clasificado como Llamado por duración suficiente: {duracion}s")
+                
+                # 🔥 DETECCIÓN ADICIONAL POR answered_by
+                if hasattr(marcador_call, 'answered_by') and marcador_call.answered_by:
+                    answered_by = marcador_call.answered_by.lower()
+                    if answered_by == 'human':
+                        estado_final = 'Llamado'
+                        print(f"[DEBUG] Marcador: Clasificado como Llamado por humano - Duración: {duracion}s")
+                    elif answered_by == 'machine_start':
+                        estado_final = 'No Contesto'
+                        print(f"[DEBUG] Marcador: Contestó máquina al inicio")
+                    elif answered_by == 'machine_end_beep':
+                        estado_final = 'No Contesto'
+                        print(f"[DEBUG] Marcador: Contestó máquina al final")
+                
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Clasificación automática: {estado_final} - Duración: {duracion}s")
                 
                 # Guardar en todos los sheets (compartidos + individual)
                 datos_guardar = st.session_state.marcador_datos.copy()
@@ -3519,26 +3826,39 @@ def monitorear_y_guardar_marcador():
                 # 2. Guardar en sheet individual del agente
                 exito_individual = guardar_marcador_en_sheet_agente(datos_guardar, int(duracion), estado_final)
                 
-                # Mostrar resultado
+                # 🔥 MOSTRAR RESULTADO DETALLADO
                 if exito_compartidos and exito_individual:
                     st.success(f"✅ Información guardada en todos los sheets (compartidos + individual)")
-                    print(f"[DEBUG] Marcador: Información guardada exitosamente en todos los sheets")
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Información guardada exitosamente en todos los sheets")
                 elif exito_compartidos:
                     st.success(f"✅ Información guardada en sheets compartidos")
                     st.warning("⚠️ Error guardando en sheet individual")
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Guardado parcial - Solo sheets compartidos")
                 elif exito_individual:
                     st.success(f"✅ Información guardada en sheet individual")
                     st.warning("⚠️ Error guardando en sheets compartidos")
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Guardado parcial - Solo sheet individual")
                 else:
                     st.error("❌ Error guardando en todos los sheets")
                     print(f"[ERROR] Marcador: Error guardando en todos los sheets")
                 
-                # Limpiar estado
+                # 🔥 LIMPIAR ESTADO DE MARCADOR COMPLETO
                 st.session_state.marcador_call_sid = None
                 st.session_state.marcador_datos = {}
                 
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Estado de llamada activa limpiado completamente")
+                st.success("✅ Llamada de marcador finalizada - Estado actualizado automáticamente")
+                
+            else:
+                # 🔥 LA LLAMADA SIGUE ACTIVA, MOSTRAR INFORMACIÓN
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Llamada sigue activa - Estado: {marcador_call.status}")
+                
         except Exception as e:
             print(f"[ERROR] Marcador: Error en monitoreo: {e}")
+            # Si hay error, limpiar estado para evitar bloqueos
+            st.session_state.marcador_call_sid = None
+            st.session_state.marcador_datos = {}
+            print(f"[DEBUG] 🔥🔥🔥 Marcador: Estado limpiado por error de monitoreo")
 
 # Mostrar resumen de la última llamada si hay datos
     if st.session_state.marcador_datos and st.session_state.marcador_call_sid is None:
