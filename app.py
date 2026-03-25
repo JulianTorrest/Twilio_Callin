@@ -1023,8 +1023,13 @@ def get_agent_sheet_url(agente_id):
         print(f"[DEBUG] Usando sheet por defecto para agente {agente_id}: {URL_SHEET_CONTACTOS[:50]}...")
         return URL_SHEET_CONTACTOS
 
-def cargar_contactos_agente(cedula_agente):
-    """Carga contactos desde Google Sheets filtrados por cedula_agente usando su sheet específico"""
+def cargar_contactos_agente(cedula_agente, preserve_local_changes=True):
+    """Carga contactos desde Google Sheets filtrados por cedula_agente usando su sheet específico
+    
+    Args:
+        cedula_agente: ID del agente
+        preserve_local_changes: Si True, preserva los cambios locales existentes
+    """
     try:
         # Obtener la URL del sheet específico del agente
         agent_sheet_url = get_agent_sheet_url(cedula_agente)
@@ -1098,6 +1103,41 @@ def cargar_contactos_agente(cedula_agente):
         
         # Asignar agente_id si está vacío (solo para contactos del agente)
         df_agente['agente_id'] = df_agente['agente_id'].fillna('').replace('', cedula_agente)
+        
+        # ✅ PRESERVAR CAMBIOS LOCALES (si se solicita)
+        if preserve_local_changes and 'df_contactos' in st.session_state and st.session_state.df_contactos is not None:
+            df_local = st.session_state.df_contactos
+            print(f"[SYNC] Preservando cambios locales de {len(df_local)} contactos...")
+            
+            # Identificar contactos modificados localmente
+            contactos_modificados_local = df_local[
+                df_local['estado'].isin(['Llamado', 'No Contesto', 'Gestionada'])
+            ]
+            
+            if not contactos_modificados_local.empty:
+                print(f"[SYNC] Se preservarán {len(contactos_modificados_local)} contactos con estados modificados")
+                
+                # Para cada contacto modificado localmente, actualizar su estado en el DataFrame cargado
+                for _, local_row in contactos_modificados_local.iterrows():
+                    # Buscar el contacto por teléfono en el DataFrame cargado
+                    mask = df_agente['telefono'] == local_row['telefono']
+                    if mask.any():
+                        # Actualizar el estado y otros campos del contacto
+                        idx_actualizar = df_agente[mask].index[0]
+                        df_agente.loc[idx_actualizar, 'estado'] = local_row['estado']
+                        df_agente.loc[idx_actualizar, 'observacion'] = local_row['observacion']
+                        df_agente.loc[idx_actualizar, 'fecha_llamada'] = local_row['fecha_llamada']
+                        df_agente.loc[idx_actualizar, 'duracion_seg'] = local_row['duracion_seg']
+                        df_agente.loc[idx_actualizar, 'sid_llamada'] = local_row['sid_llamada']
+                        df_agente.loc[idx_actualizar, 'agente_id'] = local_row['agente_id']
+                        
+                        print(f"[SYNC] Contacto {local_row['nombre']} - Estado preservado: {local_row['estado']}")
+                    else:
+                        print(f"[SYNC] ⚠️ No se encontró teléfono {local_row['telefono']} en Sheet")
+                
+                print(f"[SYNC] ✅ Cambios locales preservados exitosamente")
+            else:
+                print(f"[SYNC] No hay cambios locales que preservar")
         
         print(f"[DEBUG] ✅ DataFrame cargado con {len(df_agente)} contactos y {len(df_agente.columns)} columnas")
         
@@ -2215,6 +2255,37 @@ if st.session_state.agente_id and not st.session_state.llamada_activa_sid and no
         st.rerun()
     else:
         print(f"[PERSISTENCE] No hay llamadas activas para restaurar")
+
+# ✅ SINCRONIZACIÓN INTELIGENTE AL RECARGAR (Evitar sobreescribir cambios locales)
+if st.session_state.agente_id and 'df_contactos' in st.session_state and st.session_state.df_contactos is not None:
+    print(f"[SYNC] Verificando si hay cambios locales pendientes antes de recargar contactos...")
+    
+    # Verificar si hay contactos con estados modificados localmente
+    cambios_locales = False
+    if st.session_state.df_contactos is not None and not st.session_state.df_contactos.empty:
+        # Buscar contactos que ya no estén en "Pendientes" pero podrían estar desactualizados en el Sheet
+        contactos_modificados = st.session_state.df_contactos[
+            st.session_state.df_contactos['estado'].isin(['Llamado', 'No Contesto', 'Gestionada'])
+        ]
+        
+        if not contactos_modificados.empty:
+            cambios_locales = True
+            print(f"[SYNC] Se detectaron {len(contactos_modificados)} contactos con estados modificados localmente")
+            
+            # Sincronizar cambios locales con el Sheet antes de recargar
+            try:
+                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "SYNC_ON_RELOAD"):
+                    print(f"[SYNC] ✅ Cambios locales sincronizados con Sheet exitosamente")
+                    add_log(f"SYNC_ON_RELOAD: {len(contactos_modificados)} contactos sincronizados", "DATA")
+                else:
+                    print(f"[SYNC] ⚠️ Error sincronizando cambios locales")
+                    add_log(f"SYNC_ON_RELOAD_ERROR: Falló sincronización", "ERROR")
+            except Exception as e:
+                print(f"[SYNC] ERROR sincronizando cambios: {e}")
+                add_log(f"SYNC_EXCEPTION: {e}", "ERROR")
+    
+    if not cambios_locales:
+        print(f"[SYNC] No hay cambios locales pendientes, se puede recargar desde Sheet normalmente")
 if 'ultimo_refresh_llamada' not in st.session_state: st.session_state.ultimo_refresh_llamada = 0
 if 'webrtc_activo' not in st.session_state: st.session_state.webrtc_activo = False
 if 'webrtc_numero' not in st.session_state: st.session_state.webrtc_numero = None
@@ -3966,16 +4037,53 @@ with tab_op:
                                         print(f"[DEBUG] WebRTC - Actualizando estado en Sheet Llamadas")
                                         if URL_SHEET_CONTACTOS:
                                             try:
-                                                st.write(" Actualizando estado en Sheet Llamadas...")
+                                                st.write("🔄 Actualizando estado en Sheet Llamadas...")
+                                                
+                                                # 📋 MOSTRAR INFORMACIÓN CLARA DE QUÉ SHEETS SE ACTUALIZARÁN
+                                                agent_sheet_url = get_agent_sheet_url(st.session_state.agente_id)
+                                                st.info(f"📊 **ACTUALIZANDO SHEETS (WebRTC):**")
+                                                st.write(f"• 📋 **Sheet Compartido:** {URL_SHEET_CONTACTOS[:50]}...")
+                                                if agent_sheet_url != URL_SHEET_CONTACTOS:
+                                                    st.write(f"• 👤 **Sheet Individual Agente {st.session_state.agente_id}:** {agent_sheet_url[:50]}...")
+                                                    st.write(f"✅ **Se actualizarán AMBOS sheets**")
+                                                else:
+                                                    st.write(f"⚠️ **Solo existe sheet compartido (sin sheet individual)**")
+                                                
                                                 # Usar actualización segura que busca por teléfono y actualiza ambos sheets
                                                 if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "WEBRTC_END", contact_idx=idx):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica)")
-                                                    add_log(f"WEBRTC_SYNC_LLAMADAS: {c['nombre']} - {webrtc_final_status}", "DATA")
+                                                    st.success("✅ **ESTADO ACTUALIZADO EN SHEETS (WebRTC)**")
+                                                    
+                                                    if agent_sheet_url != URL_SHEET_CONTACTOS:
+                                                        st.success(f"👤 **Sheet Individual del Agente**: Actualizado")
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado")
+                                                        add_log(f"WEBRTC_BOTH_SHEETS: {c['nombre']} - {webrtc_final_status} (AMBOS SHEETS)", "DATA")
+                                                    else:
+                                                        st.info(f"📋 **Sheet Compartido**: Actualizado (solo existe este)")
+                                                        add_log(f"WEBRTC_SHARED_SHEET: {c['nombre']} - {webrtc_final_status} (SOLO COMPARTIDO)", "DATA")
+                                                    
+                                                    # 📊 MOSTRAR RESUMEN DE LA ACTUALIZACIÓN
+                                                    st.markdown(f"""
+                                                    <div style="background: #e3f2fd; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                                                        <h4 style="margin: 0 0 10px 0; color: #1976d2;">📝 **RESUMEN DE ACTUALIZACIÓN (WebRTC)</h4>
+                                                        <div style="font-size: 0.9em;">
+                                                            <strong>📞 Contacto:</strong> {c['nombre']} - {tel}<br>
+                                                            <strong>🔄 Estado:</strong> {webrtc_final_status}<br>
+                                                            <strong>📅 Fecha:</strong> {t_fin.strftime("%Y-%m-%d %H:%M:%S")}<br>
+                                                            <strong>⏱️ Duración:</strong> {dur} segundos<br>
+                                                            <strong>👤 Agente:</strong> {st.session_state.agente_id}<br>
+                                                            <strong>📊 Sheets actualizados:</strong> {'Compartido + Individual' if agent_sheet_url != URL_SHEET_CONTACTOS else 'Solo Compartido'}
+                                                        </div>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
                                                 else:
-                                                    st.warning(" Error actualizando Sheet Llamadas")
+                                                    st.error("❌ **ERROR ACTUALIZANDO SHEETS (WebRTC)**")
+                                                    st.error("⚠️ **Los cambios podrían no haberse guardado correctamente**")
+                                                    add_log(f"WEBRTC_SHEETS_ERROR: {c['nombre']} - {webrtc_final_status}", "ERROR")
                                             except Exception as e_llamadas:
-                                                st.error(f" Error en Sheet Llamadas: {e_llamadas}")
+                                                st.error(f"❌ **ERROR CRÍTICO EN SHEETS (WebRTC)**")
+                                                st.error(f"📋 **Error:** {e_llamadas}")
                                                 print(f"[ERROR] WebRTC Update Llamadas: {e_llamadas}")
+                                                add_log(f"WEBRTC_CRITICAL_SHEET_ERROR: {e_llamadas}", "ERROR")
                                         
                                         add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
                                         
@@ -4493,15 +4601,52 @@ with tab_op:
                                         if URL_SHEET_CONTACTOS:
                                             try:
                                                 st.write("🔄 Actualizando estado en Sheet Llamadas...")
+                                                
+                                                # 📋 MOSTRAR INFORMACIÓN CLARA DE QUÉ SHEETS SE ACTUALIZARÁN
+                                                agent_sheet_url = get_agent_sheet_url(st.session_state.agente_id)
+                                                st.info(f"📊 **ACTUALIZANDO SHEETS:**")
+                                                st.write(f"• 📋 **Sheet Compartido:** {URL_SHEET_CONTACTOS[:50]}...")
+                                                if agent_sheet_url != URL_SHEET_CONTACTOS:
+                                                    st.write(f"• 👤 **Sheet Individual Agente {st.session_state.agente_id}:** {agent_sheet_url[:50]}...")
+                                                    st.write(f"✅ **Se actualizarán AMBOS sheets**")
+                                                else:
+                                                    st.write(f"⚠️ **Solo existe sheet compartido (sin sheet individual)**")
+                                                
                                                 # Usar actualización segura que busca por teléfono y actualiza ambos sheets
                                                 if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "CONFERENCE_END", contact_idx=idx):
-                                                    st.success("✅ Estado actualizado en Sheet Llamadas (fila específica por usuario)")
-                                                    add_log(f"UPDATE_LLAMADAS: {c['nombre']} - {final_status}", "DATA")
+                                                    st.success("✅ **ESTADO ACTUALIZADO EN SHEETS**")
+                                                    
+                                                    if agent_sheet_url != URL_SHEET_CONTACTOS:
+                                                        st.success(f"👤 **Sheet Individual del Agente**: Actualizado")
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado")
+                                                        add_log(f"UPDATE_BOTH_SHEETS: {c['nombre']} - {final_status} (AMBOS SHEETS)", "DATA")
+                                                    else:
+                                                        st.info(f"📋 **Sheet Compartido**: Actualizado (solo existe este)")
+                                                        add_log(f"UPDATE_SHARED_SHEET: {c['nombre']} - {final_status} (SOLO COMPARTIDO)", "DATA")
+                                                    
+                                                    # 📊 MOSTRAR RESUMEN DE LA ACTUALIZACIÓN
+                                                    st.markdown(f"""
+                                                    <div style="background: #e8f5e8; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                                                        <h4 style="margin: 0 0 10px 0; color: #2e7d32;">📝 **RESUMEN DE ACTUALIZACIÓN</h4>
+                                                        <div style="font-size: 0.9em;">
+                                                            <strong>📞 Contacto:</strong> {c['nombre']} - {tel}<br>
+                                                            <strong>🔄 Estado:</strong> {final_status}<br>
+                                                            <strong>📅 Fecha:</strong> {t_fin.strftime("%Y-%m-%d %H:%M:%S")}<br>
+                                                            <strong>⏱️ Duración:</strong> {dur} segundos<br>
+                                                            <strong>👤 Agente:</strong> {st.session_state.agente_id}<br>
+                                                            <strong>📊 Sheets actualizados:</strong> {'Compartido + Individual' if agent_sheet_url != URL_SHEET_CONTACTOS else 'Solo Compartido'}
+                                                        </div>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
                                                 else:
-                                                    st.warning("⚠️ Error actualizando Sheet Llamadas")
+                                                    st.error("❌ **ERROR ACTUALIZANDO SHEETS**")
+                                                    st.error("⚠️ **Los cambios podrían no haberse guardado correctamente**")
+                                                    add_log(f"UPDATE_SHEETS_ERROR: {c['nombre']} - {final_status}", "ERROR")
                                             except Exception as e_llamadas:
-                                                st.error(f"❌ Error en Sheet Llamadas: {e_llamadas}")
+                                                st.error(f"❌ **ERROR CRÍTICO EN SHEETS**")
+                                                st.error(f"📋 **Error:** {e_llamadas}")
                                                 print(f"[ERROR] Conference Update Llamadas: {e_llamadas}")
+                                                add_log(f"CRITICAL_SHEET_ERROR: {e_llamadas}", "ERROR")
                                         
                                         # --- PASO 4: LIMPIEZA DE ESTADO ---
                                         print(f"[DEBUG] Limpiando estado de llamada")
