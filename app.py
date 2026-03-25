@@ -2942,8 +2942,19 @@ with tab_op:
     
     # 🔥 LÓGICA DE MAPEO DE PESTAÑA A ESTADO DEL DF (solo si hay contactos)
     opc = st.radio("Ver:", ["Pendientes", "No Contestaron", "Programadas", "Gestionadas"], horizontal=True, key="pestana_opciones")
-    # Lógica de mapeo de pestaña a estado del DF
-    f_est = "Pendiente" if "Pendientes" in opc else "No Contesto" if "No Contestaron" in opc else "Programada" if "Programadas" in opc else "Gestionado"
+    # 🔥 CORRECCIÓN: Mapeo correcto de pestañas a estados del sheet del agente
+    # Pendientes = "Pendiente" o vacío/NaN en campo estado
+    # Programadas = "Programada" en campo estado  
+    # No Contestaron = "No Contesto" en campo estado
+    # Gestionadas = "Llamado" o "Gestionado" en campo estado
+    if "Pendientes" in opc:
+        f_est = "Pendiente"  # También incluirá valores vacíos/NaN en el filtrado
+    elif "Programadas" in opc:
+        f_est = "Programada"
+    elif "No Contestaron" in opc:
+        f_est = "No Contesto"
+    else:  # Gestionadas
+        f_est = "Gestionado"  # También incluirá "Llamado" en el filtrado
     
     # 🔥 DEBUG: Verificar datos por categoría
     print(f"[DEBUG] Categoría seleccionada: {opc} -> Estado: {f_est}")
@@ -2984,13 +2995,19 @@ with tab_op:
     st.markdown("### 🔍 Búsqueda Avanzada")
     search = st.text_input("🔍 Buscar Cliente (nombre, teléfono, notas, estado):", placeholder="Ej: Juan, 3001234567, pendiente...")
     
-    # 🔥 FILTRO INTELIGENTE CON CONTACTO ACTIVO DE CONFERENCE CALL
+    # 🔥 FILTRO INTELIGENTE CORREGIDO SEGÚN ESTADOS REALES DEL SHEET
     print(f"[DEBUG] Aplicando filtro para categoría: {opc}")
-    if "Gestionadas" in opc:
-        # Para "Gestionadas": mostrar contactos que contestaron la llamada ('Llamado' y 'Gestionado')
+    
+    if "Pendientes" in opc:
+        # Pendientes = "Pendiente" o valores vacíos/NaN en campo estado
+        df_work = df[(df['estado'] == 'Pendiente') | (df['estado'].isna()) | (df['estado'] == '')]
+        print(f"[DEBUG] Filtro Pendientes (Pendiente/vacío/NaN) aplicado - Resultados: {len(df_work)}")
+    elif "Gestionadas" in opc:
+        # Gestionadas = "Llamado" o "Gestionado" 
         df_work = df[df['estado'].isin(['Llamado', 'Gestionado'])]
-        print(f"[DEBUG] Filtro Gestionadas aplicado - Resultados: {len(df_work)}")
+        print(f"[DEBUG] Filtro Gestionadas (Llamado/Gestionado) aplicado - Resultados: {len(df_work)}")
     else:
+        # Para Programadas y No Contestaron: filtro exacto
         # 🔥 CORRECCIÓN: Normalizar estado para comparación
         df_work = df[df['estado'].str.strip() == f_est]
         print(f"[DEBUG] Filtro {f_est} aplicado - Resultados: {len(df_work)}")
