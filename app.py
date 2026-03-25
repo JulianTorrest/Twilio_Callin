@@ -3385,30 +3385,30 @@ with tab_marcador:
                         
                     else:
                         # 🔥 CLASIFICACIÓN DE OTROS ESTADOS
-                        if marcador_call.status == 'no-answer':
+                        if estado_actual == 'no-answer':
                             resultado_final = 'No Contesto'
                             st.warning(f"📞 El cliente no contestó (timeout)")
                             print(f"[DEBUG] Marcador: Clasificado como No Contesto - Timeout")
                             
-                        elif marcador_call.status == 'busy':
+                        elif estado_actual == 'busy':
                             resultado_final = 'Ocupado'
                             st.warning(f"📞 Línea ocupada")
                             print(f"[DEBUG] Marcador: Clasificado como Ocupado")
                             
-                        elif marcador_call.status == 'failed':
+                        elif estado_actual == 'failed':
                             resultado_final = 'No Contesto'
                             st.error(f"📞 La llamada falló (posiblemente celular apagado)")
                             print(f"[DEBUG] Marcador: Clasificado como No Contesto - Falló")
                             
-                        elif marcador_call.status == 'canceled':
+                        elif estado_actual == 'canceled':
                             resultado_final = 'Cancelado'
                             st.info(f"📞 Llamada cancelada")
                             print(f"[DEBUG] Marcador: Clasificado como Cancelado")
                             
                         else:
-                            resultado_final = marcador_call.status.capitalize()
-                            st.info(f"ℹ️ Llamada terminada: {marcador_call.status}")
-                            print(f"[DEBUG] Marcador: Estado por defecto: {marcador_call.status}")
+                            resultado_final = estado_actual.capitalize()
+                            st.info(f"ℹ️ Llamada terminada: {estado_actual}")
+                            print(f"[DEBUG] Marcador: Estado por defecto: {estado_actual}")
                     
                     # 🔥 GUARDAR AUTOMÁTICAMENTE CUANDO TERMINA
                     datos_guardar = datos.copy()
@@ -3457,7 +3457,7 @@ with tab_marcador:
                         st.metric("⏱️ Duración", tiempo_formateado)
                     
                     with col_estado:
-                        st.metric("📊 Estado", marcador_call.status.upper())
+                        st.metric("📊 Estado", estado_actual.upper())
                     
                     # 🔥 BOTONES DE CONTROL DE LLAMADA (SIEMPRE VISIBLES)
                     st.markdown("#### 🎛️ Control de Llamada")
