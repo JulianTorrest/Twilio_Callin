@@ -3587,6 +3587,37 @@ with tab_op:
                 st.session_state.pagina_actual += 1
                 st.rerun()
         
+    # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
+    contacto_activo_mostrado = False
+    idx_activo = None
+    
+    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+        idx_activo = st.session_state.conference_idx
+        
+        # 🔥 CORRECCIÓN CRÍTICA: Validar que idx_activo no sea None y sea válido
+        if df is not None and not df.empty and idx_activo is not None and isinstance(idx_activo, int) and idx_activo >= 0 and idx_activo < len(df):
+            contacto_activo = df.iloc[idx_activo]
+            inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
+            
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
+                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 28px; margin-right: 15px;">📞</span>
+                    <strong style="font-size: 18px;">LLAMADA ACTIVA</strong>
+                    <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
+                </div>
+                <div style="font-size: 16px;">
+                    <strong>👤 Contacto:</strong> {contacto_activo['nombre']}<br>
+                    <strong>📱 Teléfono:</strong> {contacto_activo['telefono']}<br>
+                    <strong>⏰ Inicio:</strong> {inicio_llamada.strftime('%H:%M:%S')}<br>
+                    <strong>📊 Estado:</strong> {contacto_activo.get('estado', 'Pendiente')}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            contacto_activo_mostrado = True
+            print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
+    
     # 🔥 CORRECCIÓN CRÍTICA: Mantener contacto activo visible aunque esté fuera de la página actual
     contacto_activo_en_pagina = False
     if contacto_activo_mostrado and idx_activo is not None:
@@ -3618,37 +3649,6 @@ with tab_op:
             print(f"[DEBUG] Contacto activo {idx_activo} agregado manualmente a la página actual")
         else:
             print(f"[WARNING] Contacto activo {idx_activo} fuera de rango del DataFrame principal")
-
-    # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
-    contacto_activo_mostrado = False
-    idx_activo = None
-    
-    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
-        idx_activo = st.session_state.conference_idx
-        
-        # 🔥 CORRECCIÓN CRÍTICA: Validar que idx_activo no sea None y sea válido
-        if df is not None and not df.empty and idx_activo is not None and isinstance(idx_activo, int) and idx_activo >= 0 and idx_activo < len(df):
-            contacto_activo = df.iloc[idx_activo]
-            inicio_llamada = st.session_state.get('t_inicio_dt', datetime.now())
-            
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
-                <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                    <span style="font-size: 28px; margin-right: 15px;">📞</span>
-                    <strong style="font-size: 18px;">LLAMADA ACTIVA</strong>
-                    <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
-                </div>
-                <div style="font-size: 16px;">
-                    <strong>👤 Contacto:</strong> {contacto_activo['nombre']}<br>
-                    <strong>📱 Teléfono:</strong> {contacto_activo['telefono']}<br>
-                    <strong>⏰ Inicio:</strong> {inicio_llamada.strftime('%H:%M:%S')}<br>
-                    <strong>📊 Estado:</strong> {contacto_activo.get('estado', 'Pendiente')}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            contacto_activo_mostrado = True
-            print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
     
     # 🔥 MANTENER CONTACTO ACTIVO EN LA LISTA NORMAL (para mostrar botones)
     # NO excluir el contacto activo para que aparezca en su tarjeta con botones
@@ -3807,18 +3807,26 @@ with tab_op:
                             if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
                                 try:
                                     # 🔍 VALIDACIÓN ANTES DE INICIAR LLAMADA
-                                    print(f"[DEBUG] Botón Conference Call presionado - idx: {idx}")
-                                    print(f"[DEBUG] Contacto actual: {c['nombre']} - {tel}")
+                                    print(f"[DEBUG] 🔥🔥🔥 Botón Conference Call presionado - idx: {idx}")
+                                    print(f"[DEBUG] 🔥🔥🔥 Contacto actual: {c['nombre']} - {tel}")
+                                    print(f"[DEBUG] 🔥🔥🔥 Estado actual llamada_activa_sid: {st.session_state.llamada_activa_sid}")
+                                    print(f"[DEBUG] 🔥🔥🔥 Número agente configurado: {st.session_state.numero_celular_agente}")
                                     
                                     # Validar que no haya llamada activa
                                     if st.session_state.llamada_activa_sid is not None:
+                                        print(f"[DEBUG] ❌ Ya hay llamada activa: {st.session_state.llamada_activa_sid}")
                                         st.error(f"❌ ERROR: Ya hay una llamada activa")
                                         st.stop()
+                                    else:
+                                        print(f"[DEBUG] ✅ No hay llamada activa, puede continuar")
                                     
                                     # Validar número del agente
                                     if not st.session_state.numero_celular_agente:
+                                        print(f"[DEBUG] ❌ No hay número de agente configurado")
                                         st.error(f"❌ ERROR: No hay número de agente configurado")
                                         st.stop()
+                                    else:
+                                        print(f"[DEBUG] ✅ Número de agente configurado: {st.session_state.numero_celular_agente}")
                                     
                                     # Crear conference call
                                     print(f"[DEBUG] Iniciando conference call")
