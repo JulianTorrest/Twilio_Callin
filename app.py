@@ -3020,7 +3020,12 @@ with tab_op:
     print(f"[DEBUG] df_work final tiene {len(df_work)} contactos")
     
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
-    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
+    # ✅ CORRECCIÓN: Limpiar estado activo de todos los contactos primero
+    if 'activo_en_conference' in df_work.columns:
+        df_work['activo_en_conference'] = False
+    
+    # Marcar solo el contacto realmente activo
+    if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state and st.session_state.llamada_activa_sid is not None:
         idx_activo = st.session_state.conference_idx
         
         # 🔥 CORRECCIÓN: Validar que df no sea None ni esté vacío
@@ -3033,17 +3038,22 @@ with tab_op:
                 # 🔥 CORRECCIÓN: Crear copia para evitar SettingWithCopyWarning
                 df_work = pd.concat([df_work, df.iloc[[idx_activo]]], ignore_index=False).copy()
                 
-                # Marcar como contacto activo para identificación visual
+                # Marcar SOLO este contacto como activo para identificación visual
                 df_work.loc[idx_activo, 'activo_en_conference'] = True
-                print(f"[DEBUG] Contacto activo agregado al filtrado")
+                print(f"[DEBUG] Contacto activo agregado al filtrado y marcado como activo")
             else:
-                # Ya está en el filtrado, marcarlo como activo
+                # Ya está en el filtrado, marcar SOLO este como activo
                 # 🔥 CORRECCIÓN: Crear copia antes de modificar
                 df_work = df_work.copy()
                 df_work.loc[idx_activo, 'activo_en_conference'] = True
                 print(f"[DEBUG] Contacto activo ya estaba en filtrado, marcado como activo")
         else:
             print(f"[WARNING] Índice de contacto activo {idx_activo} inválido")
+    else:
+        # 🔥 CORRECCIÓN: Si no hay llamada activa, asegurarse de que ningún contacto aparezca como activo
+        if 'activo_en_conference' in df_work.columns:
+            df_work['activo_en_conference'] = False
+        print(f"[DEBUG] Sin llamada activa - limpiando estados activos")
     
     # Aplicar búsqueda avanzada si hay término de búsqueda
     resultados_busqueda = []
@@ -3931,21 +3941,33 @@ with tab_op:
                                 try:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
-                                    # CRONÓMETRO EN TIEMPO REAL
+                                    # 🎥 CONTADOR DE TIEMPO VISUAL GRANDE
                                     tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
                                     segundos = tiempo_transcurrido % 60
-                                    st.markdown(f" ### Tiempo: {minutos:02d}:{segundos:02d}")
+                                    
+                                    # Mostrar contador grande y visible
+                                    st.markdown(f"""
+                                    <div style="background: linear-gradient(135deg, #4CAF50, #45a049); color: white; padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
+                                        <h2 style="margin: 0; font-size: 2em;">⏱️ {minutos:02d}:{segundos:02d}</h2>
+                                        <p style="margin: 5px 0 0 0; font-size: 1.2em;">📞 LLAMADA EN CURSO</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
                                     
                                     # 1. Consultar estado real en Twilio
                                     print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
                                     remote = client.calls(st.session_state.llamada_activa_sid).fetch()
                                     print(f"[DEBUG] Estado Twilio obtenido: {remote.status}")
-                                    st.info(f" Estado Twilio: {remote.status}")
+                                    st.info(f"📊 Estado Twilio: {remote.status}")
                                     
                                     # 2. Definir condiciones de terminación
                                     call_ended_by_system = remote.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']
                                     print(f"[DEBUG] call_ended_by_system = {call_ended_by_system}")
+                                    
+                                    # ✅ DETECCIÓN MEJORADA: Si el agente colgó desde celular/tablet
+                                    if call_ended_by_system:
+                                        st.warning(f"📞 La llamada fue terminada remotamente (agente colgó desde celular/tablet)")
+                                        print(f"[DEBUG] Llamada terminada remotamente por agente")
                                     
                                     # 3. Detectar casos especiales y colgar automáticamente
                                     answered_by = str(remote.answered_by) if hasattr(remote, 'answered_by') and remote.answered_by else 'unknown'
@@ -4024,42 +4046,64 @@ with tab_op:
                                     finalizar_manual = False
                                     pausar_grabacion = False
                                     
+                                    # ✅ MOSTRAR BOTONES SIEMPRE DURANTE LLAMADA ACTIVA
                                     if not call_ended_by_system:
+                                        # 🎛️ PANEL DE CONTROL DE LLAMADA
+                                        st.markdown("""
+                                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; border: 2px solid #dee2e6; margin-bottom: 15px;">
+                                            <h4 style="margin: 0 0 10px 0; color: #495057;">🎛️ Control de Llamada Activa</h4>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                        
                                         # Mostrar botones en columnas
                                         btn_col1, btn_col2 = st.columns(2)
                                         with btn_col1:
-                                            finalizar_manual = st.button(" FINALIZAR GESTIÓN", type="primary")
+                                            finalizar_manual = st.button("🔴 FINALIZAR GESTIÓN", type="primary", use_container_width=True)
                                         with btn_col2:
                                             if not st.session_state.grabacion_pausada:
-                                                pausar_grabacion = st.button(" PAUSAR GRABACIÓN")
+                                                pausar_grabacion = st.button("⏸️ PAUSAR GRABACIÓN", use_container_width=True)
                                             else:
-                                                st.info(" Grabación pausada")
+                                                st.info("⏸️ Grabación pausada")
                                         
-                                        # Manejar pausa de grabación
-                                        if pausar_grabacion:
-                                            try:
-                                                # Pausar la grabación en Twilio
-                                                recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
-                                                if recordings:
-                                                    client.recordings(recordings[0].sid).update(status='paused')
-                                                    
-                                                    # Calcular duración hasta el momento
-                                                    dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
-                                                    
-                                                    # Guardar en Sheet Informe con estado "Grabación Pausada"
-                                                    if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.llamada_activa_sid):
-                                                        st.session_state.grabacion_pausada = True
-                                                        add_log(f"GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
-                                                        st.success(" Grabación pausada y guardada en Sheet Informe")
-                                                    else:
-                                                        st.error("Error guardando en Sheet Informe")
-                                                    
-                                                    # Usar refresh inteligente para pausar grabación
-                                                    refresh_inteligente_llamada(forzar=True)
-                                            except Exception as e:
-                                                st.error(f"Error pausando grabación: {e}")
+                                        # 📝 Área de notas durante la llamada
+                                        st.markdown("### 📝 Notas durante la llamada")
+                                        nota_llamada = st.text_area("Añadir notas:", value=nota, key=f"nota_llamada_{idx}", height=100)
+                                        
+                                        # Botón de guardar notas
+                                        if st.button("💾 Guardar Notas", key=f"guardar_notas_llamada_{idx}", use_container_width=True):
+                                            # Actualizar nota en el DataFrame
+                                            st.session_state.df_contactos.at[idx, 'observacion'] = nota_llamada
+                                            st.success("✅ Notas guardadas durante la llamada")
+                                            time.sleep(1)
+                                            st.rerun()
                                     else:
-                                        st.warning(f" Llamada terminada automáticamente: {remote.status}")
+                                        st.warning("📞 La llamada ha terminado - Procesando finalización...")
+                                    
+                                    # Manejar pausa de grabación
+                                    if pausar_grabacion:
+                                        try:
+                                            # Pausar la grabación en Twilio
+                                            recordings = client.recordings.list(call_sid=st.session_state.llamada_activa_sid, limit=1)
+                                            if recordings:
+                                                client.recordings(recordings[0].sid).update(status='paused')
+                                                
+                                                # Calcular duración hasta el momento
+                                                dur_pausa = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                                
+                                                # Guardar en Sheet Informe con estado "Grabación Pausada"
+                                                if guardar_en_sheet_informe(c, tel, "Grabación Pausada", nota, dur_pausa, st.session_state.llamada_activa_sid):
+                                                    st.session_state.grabacion_pausada = True
+                                                    add_log(f"GRABACION_PAUSADA: {c['nombre']} - {dur_pausa}s", "ACCION")
+                                                    st.success("✅ Grabación pausada y guardada en Sheet Informe")
+                                                else:
+                                                    st.error("❌ Error guardando en Sheet Informe")
+                                                
+                                                # Usar refresh inteligente para pausar grabación
+                                                refresh_inteligente_llamada(forzar=True)
+                                        except Exception as e:
+                                            st.error(f"❌ Error pausando grabación: {e}")
+                                    elif call_ended_by_system:
+                                        st.warning(f"📞 Llamada terminada automáticamente: {remote.status}")
                                     
                                     # 4. Accion de Finalización (Manual o Automática)
                                     print(f"[DEBUG] finalizar_manual={finalizar_manual}, call_ended_by_system={call_ended_by_system}")
@@ -4376,7 +4420,9 @@ with tab_op:
                                 except Exception as e_monitor:
                                     import traceback
                                     error_trace = traceback.format_exc()
+                            
                             # --- OPCIÓN DE REPROGRAMAR (SIEMPRE DISPONIBLE) ---
+                            # ✅ MOVER AQUÍ PARA QUE ESTÉ DISPONIBLE DURANTE LLAMADA ACTIVA
                             st.divider()
                             st.write("**📅 Reprogramar Llamada**")
                             
