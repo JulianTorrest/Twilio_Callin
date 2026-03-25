@@ -4632,17 +4632,17 @@ with tab_op:
                                         st.session_state.pestana_actual = "Programadas"
                                         # Usar refresh inteligente para programación
                                         refresh_inteligente_llamada(forzar=True)
+    else:
+        # 🔥 CORRECCIÓN: Solo mostrar mensaje cuando realmente no hay contactos en la categoría
+        # Verificar si realmente no hay contactos en esta categoría (no por paginación)
+        if "Pendientes" in opc:
+            total_en_categoria = len(df[(df['estado'] == 'Pendiente') | (df['estado'].isna()) | (df['estado'] == '')]) if not df.empty else 0
+        elif "Gestionadas" in opc:
+            total_en_categoria = len(df[df['estado'].isin(['Llamado', 'Gestionado'])]) if not df.empty else 0
         else:
-            # 🔥 CORRECCIÓN: Mostrar mensaje apropiado cuando df_work está vacío
-            # Verificar si realmente no hay contactos en esta categoría
-            if "Pendientes" in opc:
-                total_en_categoria = len(df[(df['estado'] == 'Pendiente') | (df['estado'].isna()) | (df['estado'] == '')]) if not df.empty else 0
-            elif "Gestionadas" in opc:
-                total_en_categoria = len(df[df['estado'].isin(['Llamado', 'Gestionado'])]) if not df.empty else 0
-            else:
-                total_en_categoria = len(df[df['estado'] == f_est]) if not df.empty else 0
-            
-            if total_en_categoria == 0:
-                st.success(f"¡Felicidades! No hay más clientes en la categoría: {opc}")
-            else:
-                st.info(f"No hay contactos para mostrar en esta página de {opc}")
+            total_en_categoria = len(df[df['estado'] == f_est]) if not df.empty else 0
+        
+        # Solo mostrar mensaje si realmente no hay contactos en la categoría
+        if total_en_categoria == 0:
+            st.success(f"¡Felicidades! No hay más clientes en la categoría: {opc}")
+        # Si hay contactos pero df_work está vacío, no mostrar nada (puede ser por paginación/filtros)
