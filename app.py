@@ -591,11 +591,12 @@ class RateLimiter:
     Este sistema monitorea las operaciones y agrega delays automáticos
     cuando se acerca al 90% del límite.
     """
-    def __init__(self, max_requests_per_minute=50, warning_threshold=0.9):
+    def __init__(self, max_requests_per_minute=80, warning_threshold=0.85):
         self.max_requests = max_requests_per_minute
         self.warning_threshold = warning_threshold
         self.request_times = []
         self.warning_shown = False
+        self.last_warning_time = 0
     
     def check_and_wait(self, operation_type="read"):
         """Verifica el rate limit y espera si es necesario
@@ -612,19 +613,21 @@ class RateLimiter:
         current_usage = len(self.request_times)
         usage_percentage = current_usage / self.max_requests
         
-        # Si estamos al 90% o más del límite
+        # 🔥 OPTIMIZACIÓN: Reducir delays para sincronización más rápida
         if usage_percentage >= self.warning_threshold:
-            wait_time = 3  # Esperar 3 segundos
-            if not self.warning_shown:
+            wait_time = 1.5  # 🔥 REDUCIDO: Esperar solo 1.5 segundos
+            # Mostrar advertencia solo cada 10 segundos para no spam
+            if now - self.last_warning_time > 10:
                 print(f"[RATE LIMIT] ⚠️ Uso al {usage_percentage*100:.1f}% ({current_usage}/{self.max_requests})")
                 print(f"[RATE LIMIT] Aplicando delay de {wait_time}s para evitar quota exceeded")
-                self.warning_shown = True
+                self.last_warning_time = now
             time.sleep(wait_time)
-        elif usage_percentage >= 0.7:  # Al 70% empezar a reducir velocidad
-            time.sleep(1)
-            self.warning_shown = False
+        elif usage_percentage >= 0.75:  # 🔥 CAMBIADO: Al 75% empezar a reducir velocidad
+            time.sleep(0.5)  # 🔥 REDUCIDO: Solo 0.5 segundos
         else:
-            self.warning_shown = False
+            # 🔥 NUEVO: Delay mínimo para operaciones rápidas
+            if operation_type == "write" and current_usage > 5:
+                time.sleep(0.2)  # Delay muy pequeño solo para escrituras después de 5 ops
         
         # Registrar esta operación
         self.request_times.append(now)
@@ -2337,17 +2340,56 @@ if st.session_state.agente_id and 'df_contactos' in st.session_state and st.sess
             cambios_locales = True
             print(f"[SYNC] Se detectaron {len(contactos_modificados)} contactos con estados modificados localmente")
             
-            # Sincronizar cambios locales con el Sheet antes de recargar
+            # 🔥 OPTIMIZACIÓN: Sincronizar solo contactos que realmente cambiaron desde la última sincronización
             try:
-                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "SYNC_ON_RELOAD"):
+                # 🔥 VERIFICAR SI EL USUARIO ESTÁ CAMBIANDO DE PESTAÑA RÁPIDAMENTE
+                last_user_action = st.session_state.get('ultimo_refresh_llamada', 0)
+                time_since_last_action = time.time() - last_user_action
+                
+                # Si el usuario cambió de pestaña hace menos de 2 segundos, omitir sincronización
+                if time_since_last_action < 2:
+                    print(f"[SYNC] ⚠️ Usuario cambiando de pestaña rápidamente ({time_since_last_action:.1f}s), omitiendo sincronización...")
+                    cambios_locales = False  # Marcar como si no hubiera cambios para saltar sincronización
+                
+                # Verificar si ya hay una sincronización en progreso para evitar duplicados
+                sync_key = f"sync_in_progress_{st.session_state.agente_id}"
+                if sync_key not in st.session_state:
+                    st.session_state[sync_key] = False
+                
+                # Si ya hay una sincronización en progreso, saltar
+                if st.session_state[sync_key]:
+                    print(f"[SYNC] ⚠️ Sincronización ya en progreso, omitiendo...")
+                    cambios_locales = False  # Marcar como si no hubiera cambios para saltar sincronización
+                
+                st.session_state[sync_key] = True
+                
+                # 🔥 LIMITAR A MÁXIMO 3 CONTACTOS POR SINCRONIZACIÓN PARA EVITAR TIMEOUTS
+                contactos_a_sincronizar = contactos_modificados.head(3)
+                print(f"[SYNC] 🔥 OPTIMIZACIÓN: Sincronizando solo {len(contactos_a_sincronizar)} de {len(contactos_modificados)} contactos")
+                
+                if update_both_sheets_safe(contactos_a_sincronizar, st.session_state.agente_id, "SYNC_ON_RELOAD_OPTIMIZED"):
                     print(f"[SYNC] ✅ Cambios locales sincronizados con Sheet exitosamente")
-                    add_log(f"SYNC_ON_RELOAD: {len(contactos_modificados)} contactos sincronizados", "DATA")
+                    add_log(f"SYNC_ON_RELOAD: {len(contactos_a_sincronizar)} contactos sincronizados (optimizado)", "DATA")
+                    
+                    # 🔥 MARCAR COMO SINCRONIZADOS PARA NO VOLVER A PROCESARLOS
+                    for idx in contactos_a_sincronizar.index:
+                        # Agregar marca de sincronización
+                        if 'ultima_sincronizacion' not in st.session_state:
+                            st.session_state.ultima_sincronizacion = {}
+                        st.session_state.ultima_sincronizacion[idx] = datetime.now().isoformat()
                 else:
                     print(f"[SYNC] ⚠️ Error sincronizando cambios locales")
                     add_log(f"SYNC_ON_RELOAD_ERROR: Falló sincronización", "ERROR")
+                
+                # Liberar el flag de sincronización
+                st.session_state[sync_key] = False
+                
             except Exception as e:
                 print(f"[SYNC] ERROR sincronizando cambios: {e}")
                 add_log(f"SYNC_EXCEPTION: {e}", "ERROR")
+                # Liberar el flag en caso de error
+                if sync_key in st.session_state:
+                    st.session_state[sync_key] = False
     
     if not cambios_locales:
         print(f"[SYNC] No hay cambios locales pendientes, se puede recargar desde Sheet normalmente")
