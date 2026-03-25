@@ -3479,12 +3479,11 @@ with tab_op:
             contacto_activo_mostrado = True
             print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
     
-    # 🔥 EXCLUIR CONTACTO ACTIVO DE LA LISTA NORMAL PARA EVITAR DUPLICACIÓN
+    # 🔥 MANTENER CONTACTO ACTIVO EN LA LISTA NORMAL (para mostrar botones)
+    # NO excluir el contacto activo para que aparezca en su tarjeta con botones
     if contacto_activo_mostrado and idx_activo is not None:
-        # Eliminar el contacto activo de df_work para evitar duplicación
         if idx_activo in df_work.index:
-            df_work = df_work.drop(idx_activo)
-            print(f"[DEBUG] Contacto activo {idx_activo} excluido de lista normal para evitar duplicación")
+            print(f"[DEBUG] Contacto activo {idx_activo} MANTENIDO en lista normal para mostrar botones")
         else:
             print(f"[DEBUG] Contacto activo {idx_activo} no estaba en df_work")
     
@@ -3884,11 +3883,40 @@ with tab_op:
                             # --- MONITOR PARA WEBRTC ---
                             if st.session_state.webrtc_activo and st.session_state.get('webrtc_idx') == idx:
                                 # Monitor para WebRTC
-                                tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                hora_bogota = obtener_hora_bogota()
+                                tiempo_transcurrido = int((hora_bogota - st.session_state.t_inicio_dt).total_seconds())
                                 minutos = tiempo_transcurrido // 60
                                 segundos = tiempo_transcurrido % 60
+                                inicio_str = st.session_state.t_inicio_dt.strftime("%H:%M:%S")
                                 st.markdown(f"### ⏱️ Tiempo: {minutos:02d}:{segundos:02d}")
-                                st.info(f"🎧 Llamada WebRTC activa con {st.session_state.webrtc_nombre}")
+                                st.markdown(f"""
+                                <div style="background: #ff6b6b; color: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; text-align: center;">
+                                    <h4 style="margin: 0;">📞 LLAMADA ACTIVA</h4>
+                                    <h4 style="margin: 5px 0;">🔴 EN CURSO</h4>
+                                    <p style="margin: 5px 0;"><strong>👤 Contacto:</strong> {st.session_state.webrtc_nombre}</p>
+                                    <p style="margin: 5px 0;"><strong>📱 Teléfono:</strong> {tel}</p>
+                                    <p style="margin: 5px 0;"><strong>⏰ Inicio:</strong> {inicio_str} (GMT-5)</p>
+                                    <p style="margin: 5px 0;"><strong>📊 Estado:</strong> {st.session_state.webrtc_nombre}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # 🔥 BOTONES DE CONTROL DURANTE LLAMADA WEBRTC
+                                st.markdown("### 🎛️ **Control de Llamada WebRTC**")
+                                col_btn1, col_btn2 = st.columns(2)
+                                with col_btn1:
+                                    if st.button("🔴 FINALIZAR GESTIÓN", type="primary", use_container_width=True, key=f"finalizar_webrtc_{idx}"):
+                                        st.session_state.finalizacion_manual_agente = True
+                                        st.info("🔹 Finalizando llamada manualmente...")
+                                with col_btn2:
+                                    # 📝 Área de notas durante la llamada WebRTC
+                                    nota_webrtc = st.text_area("📝 Notas durante llamada:", placeholder="Añadir notas sobre la llamada...", key=f"nota_webrtc_{idx}", height=80)
+                                    if st.button("💾 Guardar Notas", key=f"guardar_notas_webrtc_{idx}", use_container_width=True):
+                                        if nota_webrtc.strip():
+                                            # Guardar notas temporalmente
+                                            if 'notas_webrtc_temp' not in st.session_state:
+                                                st.session_state.notas_webrtc_temp = {}
+                                            st.session_state.notas_webrtc_temp[idx] = nota_webrtc
+                                            st.success("✅ Notas guardadas temporalmente")
                                 
                                 # Buscar el SID de llamada WebRTC si no lo tenemos
                                 if st.session_state.webrtc_call_sid is None:
@@ -3920,6 +3948,13 @@ with tab_op:
                                         # Si la llamada terminó, determinar el estado final
                                         if remote_call.status in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
                                             call_ended_by_remote = True
+                                            
+                                            # 🔥 FORZAR LIMPIEZA INMEDIATA SI ES "NO CONTESTO" PARA EVITAR ESTADO PEGADO
+                                            if webrtc_final_status == 'No Contesto':
+                                                print(f"[DEBUG] WebRTC - No Contesto detectado, forzando limpieza inmediata")
+                                                st.warning(f"⚠️ **No Contesto detectado** - Finalizando llamada automáticamente...")
+                                                # Forzar finalización inmediata
+                                                finalizar_webrtc = True
                                             
                                             # Obtener datos de la llamada para clasificación
                                             answered_by = str(remote_call.answered_by) if hasattr(remote_call, 'answered_by') and remote_call.answered_by else 'unknown'
@@ -4383,17 +4418,46 @@ with tab_op:
                                     print(f"[DEBUG] Iniciando monitoreo de llamada Conference...")
                                     
                                     # 🎥 CONTADOR DE TIEMPO VISUAL GRANDE
-                                    tiempo_transcurrido = int((datetime.now() - st.session_state.t_inicio_dt).total_seconds())
+                                    hora_bogota = obtener_hora_bogota()
+                                    tiempo_transcurrido = int((hora_bogota - st.session_state.t_inicio_dt).total_seconds())
                                     minutos = tiempo_transcurrido // 60
                                     segundos = tiempo_transcurrido % 60
+                                    inicio_str = st.session_state.t_inicio_dt.strftime("%H:%M:%S")
+                                    
+                                    # 🔥 TIMEOUT PARA NO CONTESTO (30 segundos)
+                                    timeout_no_contesta = 30
+                                    es_timeout_no_contesta = tiempo_transcurrido >= timeout_no_contesta
+                                    
+                                    # 🔥 MOSTRAR BOTONES A PARTIR DE 1 SEGUNDO
+                                    mostrar_botones = tiempo_transcurrido >= 1
+                                    
+                                    # Mostrar estado según timeout
+                                    if es_timeout_no_contesta:
+                                        estado_color = "#ff6b6b"  # Rojo para timeout
+                                        estado_msg = "⏰ TIEMPO DE ESPERA AGOTADO"
+                                        estado_detalle = "El cliente no se unió a la conferencia"
+                                    else:
+                                        estado_color = "#4CAF50"  # Verde para normal
+                                        estado_msg = "📞 LLAMADA EN CURSO"
+                                        estado_detalle = "⏳ Esperando que se una el cliente..."
                                     
                                     # Mostrar contador grande y visible
                                     st.markdown(f"""
-                                    <div style="background: linear-gradient(135deg, #4CAF50, #45a049); color: white; padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
+                                    <div style="background: linear-gradient(135deg, {estado_color}, {'#45a049' if not es_timeout_no_contesta else '#ee5a24'}); color: white; padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 20px;">
                                         <h2 style="margin: 0; font-size: 2em;">⏱️ {minutos:02d}:{segundos:02d}</h2>
-                                        <p style="margin: 5px 0 0 0; font-size: 1.2em;">📞 LLAMADA EN CURSO</p>
+                                        <p style="margin: 5px 0 0 0; font-size: 1.2em;">{estado_msg}</p>
+                                        <p style="margin: 3px 0 0 0; font-size: 0.9em; opacity: 0.9;">{estado_detalle}</p>
+                                        <p style="margin: 5px 0 0 0; font-size: 0.8em; opacity: 0.8;">⏰ Inicio: {inicio_str} (GMT-5)</p>
                                     </div>
                                     """, unsafe_allow_html=True)
+                                    
+                                    # 🔥 MOSTRAR ADVERTENCIA DE TIMEOUT
+                                    if es_timeout_no_contesta:
+                                        st.error(f"⚠️ **TIEMPO DE ESPERA AGOTADO** ({timeout_no_contesta}s)")
+                                        st.warning("📞 **El cliente no se unió a la conferencia**")
+                                        st.info("🔹 **Considerar marcar como 'No Contesto' y finalizar la gestión**")
+                                        # Forzar finalización automática por timeout
+                                        call_ended_by_system = True
                                     
                                     # 1. Consultar estado real en Twilio
                                     print(f"[DEBUG] Consultando estado de llamada: {st.session_state.llamada_activa_sid}")
@@ -4499,8 +4563,8 @@ with tab_op:
                                     finalizar_manual = False
                                     pausar_grabacion = False
                                     
-                                    # ✅ MOSTRAR BOTONES SIEMPRE DURANTE LLAMADA ACTIVA
-                                    if not call_ended_by_system:
+                                    # ✅ MOSTRAR BOTONES A PARTIR DE 1 SEGUNDO DURANTE LLAMADA ACTIVA O TIMEOUT
+                                    if (not call_ended_by_system or es_timeout_no_contesta) and mostrar_botones:
                                         # 🎛️ PANEL DE CONTROL DE LLAMADA
                                         st.markdown("""
                                         <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; border: 2px solid #dee2e6; margin-bottom: 15px;">
@@ -4587,6 +4651,12 @@ with tab_op:
                                         
                                         # CLASIFICACIÓN AUTOMÁTICA MEJORADA DE ESTADOS (igual que WebRTC)
                                         
+                                        # 🔥 PRIORIDAD MÁXIMA: TIMEOUT DE NO CONTESTO (30s sin unirse a conferencia)
+                                        if es_timeout_no_contesta:
+                                            final_status = 'No Contesto'
+                                            st.warning(f"⏰ **Timeout de No Contesto** ({timeout_no_contesta}s)")
+                                            st.info("📞 **El cliente no se unió a la conferencia**")
+                                            print(f"[DEBUG] Conference - Timeout de No Contesto - Clasificado como No Contesto")
                                         # PRIORIDAD ALTA 1: Si fue finalizada manualmente por el agente (botón "FINALIZAR GESTIÓN")
                                         if st.session_state.get('finalizacion_manual_agente', False):
                                             final_status = 'Gestionada'
