@@ -3203,6 +3203,7 @@ with tab_marcador:
                     estado_actual = "desconocido"
                 
                 # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA CON ESTADO VISUAL
+                datos = st.session_state.marcador_datos if 'marcador_datos' in st.session_state else {}
                 estado_visual = estado_actual.upper()
                 icono_estado = "📞"
                 color_estado = "#ff6b6b"
