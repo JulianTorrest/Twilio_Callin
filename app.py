@@ -835,6 +835,103 @@ def normalize_phone_for_search(phone):
     if pd.isna(phone): return ""
     return re.sub(r'\D', '', str(phone))
 
+def update_contact_by_phone_fallback(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
+    """Fallback para actualizar contacto por teléfono cuando el índice es inválido"""
+    try:
+        print(f"[DEBUG] {operation_type} - INICIANDO FALLBACK POR TELÉFONO")
+        
+        # Obtener datos del contacto usando el índice local
+        if idx >= len(df_contactos):
+            print(f"[ERROR] {operation_type} - Índice {idx} fuera de rango incluso para fallback")
+            return False
+            
+        contact_data = df_contactos.loc[idx]
+        telefono_local = str(contact_data.get('telefono', ''))
+        nombre_local = str(contact_data.get('nombre', ''))
+        
+        print(f"[DEBUG] {operation_type} - Buscando teléfono {telefono_local} en sheet...")
+        
+        # Verificar rate limit
+        rate_limiter.check_and_wait(operation_type="read")
+        
+        # Abrir spreadsheet y buscar por teléfono
+        spreadsheet = gc.open_by_url(sheet_url)
+        worksheet = spreadsheet.get_worksheet(0)
+        sheet_data = worksheet.get_all_values()
+        
+        if len(sheet_data) < 2:
+            print(f"[ERROR] {operation_type} - Sheet vacío o sin datos")
+            return False
+        
+        # Buscar fila por teléfono
+        header_row = sheet_data[0]
+        telefono_col = -1
+        
+        # Encontrar columna de teléfono
+        for i, header in enumerate(header_row):
+            if 'telefono' in str(header).lower():
+                telefono_col = i
+                break
+        
+        if telefono_col == -1:
+            print(f"[ERROR] {operation_type} - Columna 'telefono' no encontrada en sheet")
+            return False
+        
+        # Buscar el teléfono en el sheet
+        target_row = -1
+        for row_idx, row in enumerate(sheet_data[1:], start=2):  # Empezar desde fila 2
+            if len(row) > telefono_col and str(row[telefono_col]) == telefono_local:
+                target_row = row_idx
+                print(f"[DEBUG] {operation_type} - Teléfono encontrado en fila {target_row}")
+                break
+        
+        if target_row == -1:
+            print(f"[ERROR] {operation_type} - Teléfono {telefono_local} no encontrado en sheet")
+            return False
+        
+        # Preparar datos para actualizar
+        rate_limiter.check_and_wait(operation_type="write")
+        
+        # Mapear datos del contacto a las columnas del sheet
+        row_data = [''] * len(header_row)
+        
+        for col_idx, header in enumerate(header_row):
+            header_lower = str(header).lower()
+            
+            if 'nombre' in header_lower:
+                row_data[col_idx] = nombre_local
+            elif 'telefono' in header_lower:
+                row_data[col_idx] = telefono_local
+            elif 'estado' in header_lower:
+                row_data[col_idx] = str(contact_data.get('estado', ''))
+            elif 'observacion' in header_lower:
+                row_data[col_idx] = str(contact_data.get('observacion', ''))
+            elif 'fecha_llamada' in header_lower:
+                row_data[col_idx] = str(contact_data.get('fecha_llamada', ''))
+            elif 'duracion_seg' in header_lower:
+                row_data[col_idx] = str(contact_data.get('duracion_seg', ''))
+            elif 'sid_llamada' in header_lower:
+                row_data[col_idx] = str(contact_data.get('sid_llamada', ''))
+            elif 'proxima_llamada' in header_lower:
+                row_data[col_idx] = str(contact_data.get('proxima_llamada', ''))
+            elif 'cedula_agente' in header_lower:
+                row_data[col_idx] = str(contact_data.get('cedula_agente', ''))
+            elif 'agente_id' in header_lower:
+                row_data[col_idx] = str(contact_data.get('agente_id', ''))
+        
+        # Actualizar la fila encontrada
+        end_col = chr(65 + len(row_data) - 1)
+        worksheet.update(f'A{target_row}:{end_col}{target_row}', [row_data])
+        
+        print(f"[DEBUG] {operation_type} - Fallback exitoso - Actualizada fila {target_row}")
+        print(f"[DEBUG] {operation_type} - Contacto: {nombre_local} - Tel: {telefono_local}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] {operation_type} - Error en fallback por teléfono: {e}")
+        return False
+
 def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operation_type="update"):
     """
     Actualiza solo un contacto específico en el sheet usando número de línea.
@@ -861,7 +958,10 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         # Verificar que el índice sea válido
         if idx < 0 or idx >= len(df_contactos):
             print(f"[ERROR] {operation_type} - Índice inválido: {idx} (rango válido: 0-{len(df_contactos)-1})")
-            return False
+            
+            # 🔥 FALLBACK: Buscar por teléfono si el índice es inválido
+            print(f"[DEBUG] {operation_type} - Intentando fallback por teléfono...")
+            return update_contact_by_phone_fallback(df_contactos, idx, sheet_url, agente_id, operation_type)
         
         # Verificar rate limit
         rate_limiter.check_and_wait(operation_type="write")
