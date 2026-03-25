@@ -2984,7 +2984,7 @@ try:
 except:
     df_historico = pd.DataFrame()
 
-tab_op, tab_met, tab_reportes, tab_sup, tab_aud, tab_pruebas = st.tabs(["📞 Operación", "📊 Mis Métricas", "📈 Reportes", "👤 Supervisor", "📜 Auditoría", "🧪 Pruebas"])
+tab_op, tab_met, tab_reportes, tab_sup, tab_aud, tab_marcador = st.tabs(["📞 Operación", "📊 Mis Métricas", "📈 Reportes", "👤 Supervisor", "📜 Auditoría", "📞 Marcador"])
 
 with tab_met:
     st.subheader("📊 Dashboard de Productividad en Tiempo Real")
@@ -3073,81 +3073,212 @@ with tab_sup:
 with tab_aud:
     st.markdown(f"<div class='log-box'>{'<br>'.join(st.session_state.logs[::-1])}</div>", unsafe_allow_html=True)
 
-# --- TAB DE PRUEBAS ---
-with tab_pruebas:
-    st.subheader("🧪 Módulo de Pruebas de Llamadas")
-    st.write("Prueba la calidad de las llamadas con Click-to-Call")
+# --- TAB DE MARCADOR TELEFÓNICO ---
+with tab_marcador:
+    st.subheader("📞 Marcador Telefónico")
+    st.write("Realiza llamadas manuales con registro completo de información")
     
-    col_test1, col_test2 = st.columns(2)
+    # Verificar que el agente tenga número configurado
+    if not st.session_state.numero_celular_agente:
+        st.error("❌ ERROR: No tienes un número de teléfono configurado. Contacta al administrador.")
+        st.stop()
     
-    with col_test1:
-        st.write("**Configuración de Llamada de Prueba**")
-        numero_destino = st.text_input("📱 Número Destino (a quién llamar):", value="+57", key="test_destino")
-        numero_origen = st.text_input("📞 Número Origen (tu número):", value="+57", key="test_origen")
-        
-        st.info("""**Cómo funciona:**
-        1. Twilio llama primero al **Número Destino**
-        2. Si contesta, Twilio llama al **Número Origen** (tú)
-        3. Cuando contestas, se conectan ambas llamadas
-        4. Al destino le aparece el Número Origen en el Caller ID
-        """)
+    # Inicializar variables de estado para el marcador
+    if 'marcador_call_sid' not in st.session_state:
+        st.session_state.marcador_call_sid = None
+    if 'marcador_datos' not in st.session_state:
+        st.session_state.marcador_datos = {}
     
-    with col_test2:
-        st.write("**Iniciar Prueba**")
+    col_marc1, col_marc2 = st.columns([1, 1])
+    
+    with col_marc1:
+        st.write("**📋 Información del Contacto**")
         
-        if 'test_call_sid' not in st.session_state:
-            st.session_state.test_call_sid = None
+        # Campos del formulario
+        nombre_completo = st.text_input("👤 Nombre Completo del Usuario:", placeholder="Ej: Juan Pérez García", key="marcador_nombre")
+        numero_destino = st.text_input("📱 Número de Destino:", placeholder="+573001234567", key="marcador_destino")
+        constructura = st.text_input("🏗️ Constructura:", placeholder="Ej: Constructora ABC S.A.", key="marcador_constructura")
+        municipio = st.text_input("🏙️ Municipio:", placeholder="Ej: Bogotá, Medellín, Cali", key="marcador_municipio")
         
-        if st.session_state.test_call_sid is None:
-            if st.button("🚀 INICIAR LLAMADA DE PRUEBA", type="primary"):
-                if len(numero_destino) > 5 and len(numero_origen) > 5:
-                    try:
-                        # Crear TwiML que conecta las dos llamadas
-                        twiml_test = f"""
-                        <?xml version="1.0" encoding="UTF-8"?>
-                        <Response>
-                            <Say language="es-MX">Conectando llamada de prueba</Say>
-                            <Dial callerId="{numero_origen}">
-                                <Number>{numero_origen}</Number>
-                            </Dial>
-                        </Response>
-                        """
-                        
-                        # Crear llamada al destino primero
-                        call = client.calls.create(
-                            twiml=twiml_test,
-                            to=numero_destino,
-                            from_=twilio_number
-                        )
-                        
-                        st.session_state.test_call_sid = call.sid
-                        st.success(f"✅ Llamada iniciada: {call.sid}")
-                        st.info(f"📞 Llamando a {numero_destino}...")
-                        add_log(f"TEST_CALL: {numero_destino} → {numero_origen}", "PRUEBA")
-                        time.sleep(2)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error al iniciar llamada: {e}")
-                else:
-                    st.warning("⚠️ Ingresa números válidos con código de país (+57...)")
-        else:
-            # Monitorear llamada de prueba
+        # Mostrar información del agente
+        st.info(f"""**📞 Tu Número (Caller ID):** {st.session_state.numero_celular_agente}
+        
+        **⚠️ Importante:** Al cliente le aparecerá tu número como identificador de llamada""")
+    
+    with col_marc2:
+        st.write("**📞 Realizar Llamada**")
+        
+        # Validar que no haya llamada activa
+        if st.session_state.marcador_call_sid is not None:
+            st.warning("⚠️ Ya hay una llamada activa en el marcador")
+            
+            # Monitorear llamada activa
             try:
-                test_call = client.calls(st.session_state.test_call_sid).fetch()
-                st.info(f"📊 Estado: {test_call.status}")
+                marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
+                st.info(f"📊 Estado: {marcador_call.status}")
                 
-                if test_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
-                    st.success(f"✅ Llamada finalizada: {test_call.status}")
-                    if st.button("🔄 Nueva Prueba"):
-                        st.session_state.test_call_sid = None
-                        st.rerun()
+                if marcador_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
+                    st.success(f"✅ Llamada finalizada: {marcador_call.status}")
+                    if st.button("🔄 Nueva Llamada", key="marcador_nueva"):
+                        st.session_state.marcador_call_sid = None
+                        st.session_state.marcador_datos = {}
+                        # 🔥 SIN RERUN para evitar problemas
                 else:
                     st.write("⏳ Llamada en curso...")
-                    time.sleep(3)
-                    st.rerun()
+                    
+                    # Botón para finalizar llamada manualmente
+                    if st.button("📞 Finalizar Llamada", key="marcador_finalizar"):
+                        try:
+                            client.calls(st.session_state.marcador_call_sid).update(status='completed')
+                            st.success("✅ Llamada finalizada manualmente")
+                            st.session_state.marcador_call_sid = None
+                            st.session_state.marcador_datos = {}
+                        except Exception as e:
+                            st.error(f"❌ Error finalizando llamada: {e}")
             except Exception as e:
-                st.error(f"Error: {e}")
-                st.session_state.test_call_sid = None
+                st.error(f"❌ Error verificando estado: {e}")
+                st.session_state.marcador_call_sid = None
+        
+        else:
+            # Botón para iniciar nueva llamada
+            if st.button("📞 LLAMAR (Conference Call)", type="primary", key="marcador_llamar", width='stretch'):
+                # Validaciones
+                if not nombre_completo.strip():
+                    st.error("❌ Debes ingresar el nombre completo del usuario")
+                    st.stop()
+                
+                if not numero_destino.strip() or len(numero_destino) < 10:
+                    st.error("❌ Debes ingresar un número de destino válido")
+                    st.stop()
+                
+                if not constructura.strip():
+                    st.error("❌ Debes ingresar la constructura")
+                    st.stop()
+                
+                if not municipio.strip():
+                    st.error("❌ Debes ingresar el municipio")
+                    st.stop()
+                
+                try:
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Iniciando llamada a {numero_destino}")
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Datos - {nombre_completo}, {constructura}, {municipio}")
+                    
+                    # Crear conference call para el marcador
+                    conference_name = f"Marcador_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    
+                    # TwiML para el agente
+                    twiml_agente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                    <Response>
+                        <Say language="es-MX" voice="alice">Conectando llamada desde marcador</Say>
+                        <Dial callerId="{twilio_number}" timeout="30">
+                            <Conference 
+                                startConferenceOnEnter="true"
+                                endConferenceOnExit="true"
+                                record="record-from-start"
+                                recordingStatusCallback="{function_url_base}/recording-status"
+                                trim="trim-silence"
+                                transcribe="true"
+                                transcribeCallback="{function_url_base}/transcription-callback"
+                                waitUrl=""
+                                beep="false"
+                                maxParticipants="2"
+                                quiet="false"
+                            >{conference_name}</Conference>
+                        </Dial>
+                    </Response>"""
+                    
+                    # TwiML para el cliente
+                    twiml_cliente = f"""<?xml version="1.0" encoding="UTF-8"?>
+                    <Response>
+                        <Dial timeout="30" record="true">
+                            <Conference 
+                                startConferenceOnEnter="true"
+                                endConferenceOnExit="true"
+                                record="record-from-start"
+                                recordingStatusCallback="{function_url_base}/recording-status"
+                                trim="trim-silence"
+                                transcribe="true"
+                                transcribeCallback="{function_url_base}/transcription-callback"
+                                waitUrl=""
+                                beep="false"
+                                maxParticipants="2"
+                                quiet="false"
+                            >{conference_name}</Conference>
+                        </Dial>
+                    </Response>"""
+                    
+                    # Llamar al agente primero
+                    call_agente = client.calls.create(
+                        twiml=twiml_agente,
+                        to=st.session_state.numero_celular_agente,
+                        from_=twilio_number,
+                        status_callback=f"{function_url}/status",
+                        status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                    )
+                    
+                    # Llamar al cliente con Caller ID del agente
+                    numero_agente = st.session_state.numero_celular_agente
+                    call_cliente = client.calls.create(
+                        twiml=twiml_cliente,
+                        to=numero_destino,
+                        from_=numero_agente,
+                        machine_detection='Enable',
+                        status_callback=f"{function_url}/status",
+                        status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                    )
+                    
+                    # Guardar datos de la llamada
+                    st.session_state.marcador_call_sid = call_cliente.sid
+                    st.session_state.marcador_datos = {
+                        'nombre_completo': nombre_completo,
+                        'numero_destino': numero_destino,
+                        'constructura': constructura,
+                        'municipio': municipio,
+                        'conference_name': conference_name,
+                        'inicio': datetime.now()
+                    }
+                    
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Llamada iniciada exitosamente")
+                    add_log(f"MARCADOR_CALL: {nombre_completo} - {numero_destino} - {constructura}", "MARCADOR")
+                    
+                    st.success(f"✅ Llamada iniciada exitosamente")
+                    st.info(f"📞 Agente: Recibirás llamada de {twilio_number}")
+                    st.info(f"📱 Cliente: Verá tu número {numero_agente}")
+                    
+                    # 🔥 SIN RERUN para evitar desaparición
+                    print(f"[DEBUG] 🔥🔥🔥 Marcador: Llamada iniciada SIN rerun")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error al iniciar llamada: {e}")
+                    print(f"[ERROR] Error en marcador: {e}")
+                    import traceback
+                    print(traceback.format_exc())
+                    add_log(f"MARCADOR_ERROR - {e}", "ERROR")
+    
+    # Mostrar resumen de la última llamada si hay datos
+    if st.session_state.marcador_datos and st.session_state.marcador_call_sid is None:
+        st.divider()
+        st.subheader("📋 Última Llamada Realizada")
+        
+        datos = st.session_state.marcador_datos
+        col_info1, col_info2, col_info3 = st.columns(3)
+        
+        with col_info1:
+            st.metric("👤 Contacto", datos['nombre_completo'])
+            st.metric("📱 Teléfono", datos['numero_destino'])
+        
+        with col_info2:
+            st.metric("🏗️ Constructura", datos['constructura'])
+            st.metric("🏙️ Municipio", datos['municipio'])
+        
+        with col_info3:
+            if 'inicio' in datos:
+                duracion = datetime.now() - datos['inicio']
+                st.metric("⏱️ Duración", f"{duracion.total_seconds():.0f}s")
+            
+            if st.button("🗑️ Limpiar Historial", key="marcador_limpiar"):
+                st.session_state.marcador_datos = {}
+                # 🔥 SIN RERUN
 
 # --- 6. OPERACIÓN CON WEBRTC (BLOQUE EXPANDIDO Y REFORZADO) ---
 with tab_op:
@@ -3806,6 +3937,12 @@ with tab_op:
                                 <h4 style="margin: 0 0 10px 0; color: #495057;">🎛️ Opciones de Llamada</h4>
                             </div>
                             """, unsafe_allow_html=True)
+                            
+                            # 🔥 DIAGNÓSTICO: Verificar si el botón se va a renderizar
+                            print(f"[DEBUG] 🔥🔥🔥 A punto de renderizar botón Conference Call - idx: {idx}")
+                            print(f"[DEBUG] 🔥🔥🔥 Estado actual llamada_activa_sid: {st.session_state.llamada_activa_sid}")
+                            print(f"[DEBUG] 🔥🔥🔥 Número agente configurado: {st.session_state.numero_celular_agente}")
+                            print(f"[DEBUG] 🔥🔥🔥 Contacto: {c['nombre']} - {tel}")
                             
                             # Botón principal: Conference Call
                             if st.button("📞 LLAMAR (Conference Call)", type="primary", width='stretch', key=f"call_{idx}"):
