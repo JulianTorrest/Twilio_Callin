@@ -3409,9 +3409,12 @@ with tab_op:
     
     # 🔥 CORRECCIÓN: Validación robusta de df_contactos
     if st.session_state.df_contactos is not None and not st.session_state.df_contactos.empty:
-        df = st.session_state.df_contactos
+        df = st.session_state.df_contactos.copy()  # 🔥 FORZAR COPIA FRESCA
+        print(f"[DEBUG] 🔥🔥🔥 DataFrame cargado desde session_state - Shape: {df.shape}")
+        print(f"[DEBUG] 🔥🔥🔥 Estados únicos en DataFrame cargado: {df['estado'].unique()}")
     else:
         df = pd.DataFrame()  # DataFrame vacío como fallback
+        print(f"[DEBUG] 🔥🔥🔥 DataFrame vacío - fallback")
         
         # 🔥 MANEJO DE ESTADO LIMPIO CUANDO df ESTÁ VACÍO
         st.warning("⚠️ No hay contactos cargados. Intenta recargar la página.")
