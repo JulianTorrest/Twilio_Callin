@@ -2731,24 +2731,10 @@ def detectar_interaccion_usuario():
         st.session_state.usuario_interactuando = False
 
 def refresh_inteligente_llamada(forzar=False):
-    """Refresh inteligente que respeta la interacción del usuario"""
-    detectar_interaccion_usuario()
-    
-    # Si el usuario está interactuando, usar refresh menos agresivo
-    if st.session_state.usuario_interactuando and not forzar:
-        # Refresh cada 5 segundos cuando el usuario está interactuando
-        if time.time() - st.session_state.ultimo_refresh_llamada > 5:
-            st.session_state.ultimo_refresh_llamada = time.time()
-            print(f"[DEBUG] Refresh suave - Usuario interactuando")
-            time.sleep(1)
-            st.rerun()
-    else:
-        # Refresh normal cada 2 segundos cuando no hay interacción
-        if time.time() - st.session_state.ultimo_refresh_llamada > 2:
-            st.session_state.ultimo_refresh_llamada = time.time()
-            print(f"[DEBUG] Refresh normal - Sin interacción")
-            time.sleep(1)
-            st.rerun()
+    """🔥 DESACTIVADO TEMPORALMENTE - Refresh causando problemas con Conference Call"""
+    print(f"[DEBUG] 🔥🔥🔥 Refresh inteligente DESACTIVADO para evitar interferencia con Conference Call")
+    # 🔥 COMENTADO PARA EVITAR st.rerun() QUE CAUSA DESAPARICIÓN
+    return  # Salir inmediatamente sin hacer rerun
 
 # Ejecutar verificación de auto-guardado en cada refresh
 verificar_autoguardado()
@@ -3017,13 +3003,14 @@ with tab_met:
         # Mostrar dashboard
         mostrar_dashboard_productividad(metricas)
         
-        # Auto-refresh cada 30 segundos para llamadas próximas
-        if 'ultimo_refresh_dashboard' not in st.session_state:
-            st.session_state.ultimo_refresh_dashboard = time.time()
-        
-        if time.time() - st.session_state.ultimo_refresh_dashboard > 30:
-            st.session_state.ultimo_refresh_dashboard = time.time()
-            st.rerun()
+        # 🔥 Auto-refresh DESACTIVADO para evitar interferencia con Conference Call
+        # if 'ultimo_refresh_dashboard' not in st.session_state:
+        #     st.session_state.ultimo_refresh_dashboard = time.time()
+        # 
+        # if time.time() - st.session_state.ultimo_refresh_dashboard > 30:
+        #     st.session_state.ultimo_refresh_dashboard = time.time()
+        #     st.rerun()
+        print(f"[DEBUG] 🔥🔥🔥 Dashboard refresh DESACTIVADO para evitar interferencia")
         
         st.caption("🔄 Auto-refresh cada 30 segundos")
     else:
@@ -3173,14 +3160,15 @@ with tab_op:
         if recordatorios:
             mostrar_recordatorios(recordatorios)
             
-            # Auto-refresh más frecuente cuando hay recordatorios
-            if 'ultimo_refresh_recordatorios' not in st.session_state:
-                st.session_state.ultimo_refresh_recordatorios = time.time()
-            
-            # Refresh cada 15 segundos cuando hay recordatorios activos
-            if time.time() - st.session_state.ultimo_refresh_recordatorios > 15:
-                st.session_state.ultimo_refresh_recordatorios = time.time()
-                st.rerun()
+            # 🔥 Auto-refresh DESACTIVADO para evitar interferencia con Conference Call
+            # if 'ultimo_refresh_recordatorios' not in st.session_state:
+            #     st.session_state.ultimo_refresh_recordatorios = time.time()
+            # 
+            # # Refresh cada 15 segundos cuando hay recordatorios activos
+            # if time.time() - st.session_state.ultimo_refresh_recordatorios > 15:
+            #     st.session_state.ultimo_refresh_recordatorios = time.time()
+            #     st.rerun()
+            print(f"[DEBUG] 🔥🔥🔥 Recordatorios refresh DESACTIVADO para evitar interferencia")
     
     # Componente WebRTC de Twilio Client
     if 'webrtc_token' not in st.session_state:
