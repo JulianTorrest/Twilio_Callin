@@ -3789,6 +3789,94 @@ with tab_op:
                                 - 🎯 Bueno para pruebas rápidas
                                 """)
                             
+                            # 🔥 BOTONES DE ACCIÓN SIEMPRE DISPONIBLES (GUARDAR NOTAS Y REPROGRAMAR)
+                            st.divider()
+                            st.markdown("### 📝 **Acciones de Gestión**")
+                            
+                            # 🔥 INFORMACIÓN PARA CONTACTOS "NO CONTESTO" (SIN BOTÓN MANUAL)
+                            if c['estado'] == 'No Contesto':
+                                st.info("🔔 **Este contacto no contestó la llamada**")
+                                st.caption("💡 El estado se clasificó automáticamente según el resultado de la llamada")
+                            
+                            # Botones de acción principales
+                            col_btn1, col_btn2 = st.columns(2)
+                            with col_btn1:
+                                if st.button("💾 Guardar Notas", key=f"save_notes_{idx}", width='stretch'):
+                                    # Obtener nota existente
+                                    nota_existente = str(st.session_state.df_contactos.at[idx, 'observacion']) if pd.notna(st.session_state.df_contactos.at[idx, 'observacion']) else ''
+                                    
+                                    # Combinar notas si ya existe algo
+                                    if nota_existente and nota_existente.strip():
+                                        if nota.strip() and nota != nota_existente:
+                                            # Acumular notas con timestamp y contexto de categoría
+                                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                            categoria_actual = st.session_state.df_contactos.at[idx, 'estado'] if 'estado' in st.session_state.df_contactos.columns else 'Sin categoría'
+                                            nota_acumulada = f"{nota_existente} | [{timestamp}] ({categoria_actual}) {nota}"
+                                        else:
+                                            nota_acumulada = nota_existente  # Mantener existente si la nueva está vacía o es igual
+                                    else:
+                                        # Agregar timestamp y categoría a la primera nota
+                                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                        categoria_actual = st.session_state.df_contactos.at[idx, 'estado'] if 'estado' in st.session_state.df_contactos.columns else 'Sin categoría'
+                                        nota_acumulada = f"[{timestamp}] ({categoria_actual}) {nota}"  # Primera nota con timestamp y categoría
+                                    
+                                    # Actualizar DataFrame local con notas acumuladas
+                                    st.session_state.df_contactos.at[idx, 'observacion'] = nota_acumulada
+                                    
+                                    # Actualizar tanto Sheet compartido como Sheet del agente
+                                    if URL_SHEET_CONTACTOS:
+                                        try:
+                                            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "NOTAS_ACUMULADAS", contact_idx=idx):
+                                                add_log(f"NOTAS_ACUMULADAS: {c['nombre']}", "ACCION")
+                                                st.success("✅ Notas acumuladas en ambos sheets (compartido y agente)")
+                                            else:
+                                                st.warning("⚠️ Notas acumuladas localmente, pero error actualizando sheets")
+                                        except Exception as e:
+                                            st.error(f"❌ Error acumulando notas: {e}")
+                                    else:
+                                        st.success("✅ Notas acumuladas localmente")
+                                    
+                                    time.sleep(1)
+                                    st.rerun()
+                            
+                            with col_btn2:
+                                if st.button("📅 Reprogramar", key=f"prog_{idx}", width='stretch'):
+                                    # Obtener hora actual en Bogotá para valores por defecto
+                                    hora_bogota_actual = obtener_hora_bogota()
+                                    
+                                    # Mostrar diálogo simple para reprogramar
+                                    st.markdown("#### 📅 **Reprogramar Llamada**")
+                                    col_prog1, col_prog2 = st.columns(2)
+                                    with col_prog1:
+                                        fecha_prog = st.date_input("Fecha:", value=hora_bogota_actual.date(), key=f"fecha_prog_{idx}")
+                                    with col_prog2:
+                                        hora_prog = st.time_input("Hora:", value=hora_bogota_actual.time(), key=f"hora_prog_{idx}")
+                                    
+                                    # Botón para confirmar programación
+                                    if st.button("✅ Confirmar Programación", key=f"confirm_prog_{idx}", type="primary"):
+                                        # Combinar fecha y hora
+                                        fecha_hora_prog = datetime.combine(fecha_prog, hora_prog)
+                                        
+                                        # Actualizar estado a "Programada"
+                                        st.session_state.df_contactos.at[idx, 'estado'] = 'Programada'
+                                        st.session_state.df_contactos.at[idx, 'proxima_llamada'] = fecha_hora_prog.isoformat()
+                                        
+                                        # Actualizar sheets
+                                        if URL_SHEET_CONTACTOS:
+                                            try:
+                                                if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "PROGRAMAR_LLAMADA", contact_idx=idx):
+                                                    add_log(f"PROGRAMAR: {c['nombre']} - {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}", "ACCION")
+                                                    st.success(f"✅ Llamada programada para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                                else:
+                                                    st.warning("⚠️ Llamada programada localmente, pero error actualizando sheets")
+                                            except Exception as e:
+                                                st.error(f"❌ Error programando llamada: {e}")
+                                        else:
+                                            st.success(f"✅ Llamada programada localmente para {fecha_hora_prog.strftime('%Y-%m-%d %H:%M')}")
+                                        
+                                        time.sleep(1)
+                                        st.rerun()
+                            
                             # ============================================================
                         # MONITOR DINÁMICO CUANDO HAY LLAMADA ACTIVA
                         # ============================================================
