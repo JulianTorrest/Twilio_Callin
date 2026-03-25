@@ -3089,6 +3089,11 @@ with tab_marcador:
     if 'marcador_datos' not in st.session_state:
         st.session_state.marcador_datos = {}
     
+    # 🔥 MONITOREO AUTOMÁTICO DEL MARCADOR
+    # Verificar si hay una llamada activa que necesita ser monitoreada
+    if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
+        monitorear_y_guardar_marcador()
+    
     col_marc1, col_marc2 = st.columns([1, 1])
     
     with col_marc1:
@@ -3255,7 +3260,287 @@ with tab_marcador:
                     print(traceback.format_exc())
                     add_log(f"MARCADOR_ERROR - {e}", "ERROR")
     
-    # Mostrar resumen de la última llamada si hay datos
+    # Función para guardar marcador en sheets compartidos
+def guardar_marcador_en_sheets_compartidos(datos_marcador, duracion_segundos, estado_final, call_sid):
+    """Guarda la información del marcador en ambos sheets compartidos"""
+    try:
+        print(f"[DEBUG] 🔥🔥🔥 Marcador: Guardando en sheets compartidos")
+        
+        # Obtener información de la llamada desde Twilio
+        try:
+            call_info = client.calls(call_sid).fetch()
+            account_sid = call_info.account_sid
+            start_time = call_info.start_time
+            end_time = call_info.end_time
+            duration = call_info.duration
+            from_number = call_info.from_
+            to_number = call_info.to
+            direction = call_info.direction
+            status = call_info.status
+            price = call_info.price if call_info.price else 0
+            price_unit = call_info.price_unit
+            answered_by = call_info.answered_by
+            call_type = call_info.type
+            date_created = call_info.date_created
+            parent_call_sid = call_info.parent_call_sid
+            phone_number_sid = call_info.phone_number_sid
+            error_code = call_info.error_code
+        except Exception as e:
+            print(f"[WARNING] Marcador: Error obteniendo info detallada de Twilio: {e}")
+            # Usar valores por defecto si falla
+            account_sid = ""
+            start_time = datetime.now().isoformat()
+            end_time = datetime.now().isoformat()
+            duration = str(duracion_segundos)
+            from_number = st.session_state.numero_celular_agente
+            to_number = datos_marcador['numero_destino']
+            direction = "outbound"
+            status = estado_final
+            price = 0
+            price_unit = "USD"
+            answered_by = "unknown"
+            call_type = " marcador"
+            date_created = datetime.now().isoformat()
+            parent_call_sid = ""
+            phone_number_sid = ""
+            error_code = ""
+        
+        # 1. GUARDAR EN GSHEET_CONTACTOS_URL (Sheet de Contactos)
+        if GSHEET_CONTACTOS_URL:
+            try:
+                print(f"[DEBUG] Marcador: Guardando en sheet de contactos compartido")
+                spreadsheet_contactos = gc.open_by_url(GSHEET_CONTACTOS_URL)
+                worksheet_contactos = spreadsheet_contactos.get_worksheet(0)
+                
+                # Preparar fila para sheet de contactos
+                fila_contactos = [
+                    datos_marcador['nombre_completo'],           # nombre
+                    "57",                                         # codigo_pais (siempre 57)
+                    datos_marcador['numero_destino'],            # telefono
+                    st.session_state.agente_id,                  # cedula_agente
+                    estado_final,                                 # estado
+                    f"{datos_marcador['constructura']} | {datos_marcador['municipio']}",  # observacion
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # fecha_llamada
+                    str(duracion_segundos),                     # duracion_seg
+                    call_sid,                                    # sid_llamada
+                    "",                                          # proxima_llamada (vacío)
+                    st.session_state.agente_id                   # agente_id
+                ]
+                
+                # Agregar nueva fila
+                worksheet_contactos.append_row(fila_contactos)
+                print(f"[DEBUG] Marcador: Guardado exitoso en sheet de contactos")
+                add_log(f"MARCADOR_CONTACTOS: {datos_marcador['nombre_completo']} - {datos_marcador['numero_destino']}", "MARCADOR")
+                
+            except Exception as e:
+                print(f"[ERROR] Marcador: Error guardando en sheet de contactos: {e}")
+                add_log(f"MARCADOR_ERROR_CONTACTOS: {e}", "ERROR")
+        
+        # 2. GUARDAR EN GSHEET_URL (Sheet de Informe/Llamadas)
+        if GSHEET_URL:
+            try:
+                print(f"[DEBUG] Marcador: Guardando en sheet de informe compartido")
+                spreadsheet_informe = gc.open_by_url(GSHEET_URL)
+                worksheet_informe = spreadsheet_informe.get_worksheet(0)
+                
+                # Preparar fila para sheet de informe
+                fila_informe = [
+                    st.session_state.agente_id,                  # agente_id
+                    datos_marcador['nombre_completo'],           # nombre
+                    datos_marcador['numero_destino'],            # telefono
+                    estado_final,                                 # estado
+                    f"Constructura: {datos_marcador['constructura']} | Municipio: {datos_marcador['municipio']}",  # observacion
+                    str(duracion_segundos),                     # duracion_seg
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # fecha_llamada
+                    call_sid,                                    # call_sid
+                    account_sid,                                 # account_sid
+                    start_time,                                  # start_time
+                    end_time,                                    # end_time
+                    str(duration),                               # duration
+                    from_number,                                 # from
+                    to_number,                                   # to
+                    direction,                                   # direction
+                    status,                                      # status
+                    str(price),                                  # price
+                    price_unit,                                  # price_unit
+                    answered_by,                                 # answered_by
+                    call_type,                                   # type
+                    date_created,                                # date_created
+                    parent_call_sid,                             # parent_call_sid
+                    phone_number_sid,                            # phone_number_sid
+                    error_code,                                  # error_code
+                    "",                                          # url_grabacion (se llena después)
+                    "",                                          # transcription_sid (se llena después)
+                    "Pendiente"                                  # grabacion_pendiente
+                ]
+                
+                # Agregar nueva fila
+                worksheet_informe.append_row(fila_informe)
+                print(f"[DEBUG] Marcador: Guardado exitoso en sheet de informe")
+                add_log(f"MARCADOR_INFORME: {datos_marcador['nombre_completo']} - {datos_marcador['numero_destino']}", "MARCADOR")
+                
+            except Exception as e:
+                print(f"[ERROR] Marcador: Error guardando en sheet de informe: {e}")
+                add_log(f"MARCADOR_ERROR_INFORME: {e}", "ERROR")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Marcador: Error general guardando en sheets compartidos: {e}")
+        import traceback
+        print(traceback.format_exc())
+        add_log(f"MARCADOR_ERROR_SHEETS_COMPARTIDOS: {e}", "ERROR")
+        return False
+
+# Función para guardar marcador en sheet individual del agente
+def guardar_marcador_en_sheet_agente(datos_marcador, duracion_segundos, estado_final):
+    """Guarda la información del marcador como nueva fila en el sheet individual del agente"""
+    try:
+        print(f"[DEBUG] 🔥🔥🔥 Marcador: Guardando en sheet individual del agente")
+        
+        # Obtener URL del sheet individual del agente
+        agent_sheet_url = get_agent_sheet_url(st.session_state.agente_id)
+        if not agent_sheet_url:
+            print(f"[ERROR] Marcador: No se encontró sheet individual para el agente {st.session_state.agente_id}")
+            return False
+        
+        # Abrir sheet individual del agente
+        spreadsheet = gc.open_by_url(agent_sheet_url)
+        worksheet = spreadsheet.get_worksheet(0)
+        
+        # Obtener encabezados actuales
+        headers = worksheet.row_values(1)
+        print(f"[DEBUG] Marcador: Encabezados encontrados: {headers}")
+        
+        # Verificar si tenemos los campos nuevos, si no, agregarlos
+        nuevos_campos = ['constructura', 'municipio']
+        for campo in nuevos_campos:
+            if campo not in headers:
+                # Agregar nueva columna al final
+                last_col = len(headers) + 1
+                worksheet.update_cell(1, last_col, campo)
+                headers.append(campo)
+                print(f"[DEBUG] Marcador: Agregado nuevo campo '{campo}' al sheet")
+        
+        # Preparar datos para la nueva fila
+        nueva_fila = [''] * len(headers)
+        
+        # Mapear campos
+        for i, header in enumerate(headers):
+            header_lower = str(header).lower()
+            
+            if 'nombre' in header_lower:
+                nueva_fila[i] = datos_marcador['nombre_completo']
+            elif 'codigo_pais' in header_lower:
+                # Extraer código país del número (ej: +57)
+                telefono = datos_marcador['numero_destino']
+                if telefono.startswith('+'):
+                    nueva_fila[i] = telefono[:3]  # +57
+                else:
+                    nueva_fila[i] = '+57'  # Default
+            elif 'telefono' in header_lower:
+                nueva_fila[i] = datos_marcador['numero_destino']
+            elif 'cedula_agente' in header_lower:
+                nueva_fila[i] = st.session_state.agente_id
+            elif 'estado' in header_lower:
+                nueva_fila[i] = estado_final
+            elif 'observacion' in header_lower:
+                # Combinar constructura y municipio
+                obs = f"{datos_marcador['constructura']} | {datos_marcador['municipio']}"
+                nueva_fila[i] = obs
+            elif 'fecha_llamada' in header_lower:
+                nueva_fila[i] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            elif 'duracion_seg' in header_lower:
+                nueva_fila[i] = str(duracion_segundos)
+            elif 'sid_llamada' in header_lower:
+                nueva_fila[i] = datos_marcador.get('call_sid', '')
+            elif 'proxima_llamada' in header_lower:
+                nueva_fila[i] = ''  # Vacío por ahora
+            elif 'agente_id' in header_lower:
+                nueva_fila[i] = st.session_state.agente_id
+            elif 'constructura' in header_lower:
+                nueva_fila[i] = datos_marcador['constructura']
+            elif 'municipio' in header_lower:
+                nueva_fila[i] = datos_marcador['municipio']
+        
+        # Encontrar la primera fila vacía (después de los encabezados)
+        existing_data = worksheet.get_all_values()
+        next_row = len(existing_data) + 1
+        
+        # Agregar la nueva fila
+        worksheet.append_row(nueva_fila)
+        
+        print(f"[DEBUG] Marcador: Nueva fila agregada en fila {next_row}")
+        print(f"[DEBUG] Marcador: Datos guardados: {nueva_fila[:5]}...")  # Primeros 5 campos
+        
+        # Registrar en logs
+        add_log(f"MARCADOR_GUARDADO: {datos_marcador['nombre_completo']} - {datos_marcador['numero_destino']} - Fila {next_row}", "MARCADOR")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Marcador: Error guardando en sheet agente: {e}")
+        import traceback
+        print(traceback.format_exc())
+        add_log(f"MARCADOR_ERROR_SHEET: {e}", "ERROR")
+        return False
+
+# Función para monitorear y guardar cuando termina la llamada del marcador
+def monitorear_y_guardar_marcador():
+    """Monitorea el estado de la llamada del marcador y guarda cuando termina"""
+    if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
+        try:
+            # Verificar estado de la llamada
+            marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
+            
+            if marcador_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
+                # Calcular duración
+                if marcador_call.status == 'completed' and hasattr(marcador_call, 'end_time') and hasattr(marcador_call, 'start_time'):
+                    duracion = (datetime.fromisoformat(marcador_call.end_time.replace('Z', '+00:00')) - 
+                               datetime.fromisoformat(marcador_call.start_time.replace('Z', '+00:00'))).total_seconds()
+                else:
+                    duracion = 0
+                
+                # Determinar estado final
+                if marcador_call.status == 'completed' and duracion > 10:
+                    estado_final = 'Llamado'
+                elif marcador_call.status == 'completed':
+                    estado_final = 'No Contesto'
+                else:
+                    estado_final = marcador_call.status.capitalize()
+                
+                # Guardar en todos los sheets (compartidos + individual)
+                datos_guardar = st.session_state.marcador_datos.copy()
+                datos_guardar['call_sid'] = st.session_state.marcador_call_sid
+                
+                # 1. Guardar en sheets compartidos
+                exito_compartidos = guardar_marcador_en_sheets_compartidos(datos_guardar, int(duracion), estado_final, st.session_state.marcador_call_sid)
+                
+                # 2. Guardar en sheet individual del agente
+                exito_individual = guardar_marcador_en_sheet_agente(datos_guardar, int(duracion), estado_final)
+                
+                # Mostrar resultado
+                if exito_compartidos and exito_individual:
+                    st.success(f"✅ Información guardada en todos los sheets (compartidos + individual)")
+                    print(f"[DEBUG] Marcador: Información guardada exitosamente en todos los sheets")
+                elif exito_compartidos:
+                    st.success(f"✅ Información guardada en sheets compartidos")
+                    st.warning("⚠️ Error guardando en sheet individual")
+                elif exito_individual:
+                    st.success(f"✅ Información guardada en sheet individual")
+                    st.warning("⚠️ Error guardando en sheets compartidos")
+                else:
+                    st.error("❌ Error guardando en todos los sheets")
+                    print(f"[ERROR] Marcador: Error guardando en todos los sheets")
+                
+                # Limpiar estado
+                st.session_state.marcador_call_sid = None
+                st.session_state.marcador_datos = {}
+                
+        except Exception as e:
+            print(f"[ERROR] Marcador: Error en monitoreo: {e}")
+
+# Mostrar resumen de la última llamada si hay datos
     if st.session_state.marcador_datos and st.session_state.marcador_call_sid is None:
         st.divider()
         st.subheader("📋 Última Llamada Realizada")
