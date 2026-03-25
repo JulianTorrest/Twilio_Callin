@@ -3191,39 +3191,75 @@ with tab_marcador:
         st.write("**📞 Realizar Llamada**")
         
         # Validar que no haya llamada activa
-        if st.session_state.marcador_call_sid is not None:
-            st.warning("⚠️ Ya hay una llamada activa en el marcador")
+        if st.session_state.llamada_activa_sid is not None:
+            st.warning("⚠️ Ya hay una llamada activa")
             
-            # 🔥 MONITOR DINÁMICO PARA MARCADOR
-            try:
-                marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
-                datos = st.session_state.marcador_datos
+            # 🔥 MOSTRAR PANEL DE CONTROL DE LLAMADA ACTIVA
+            if st.session_state.llamada_activa_sid:
+                try:
+                    llamada_activa = client.calls(st.session_state.llamada_activa_sid).fetch()
+                    estado_actual = llamada_activa.status
+                except:
+                    estado_actual = "desconocido"
                 
-                # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA
+                # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA CON ESTADO VISUAL
+                estado_visual = estado_actual.upper()
+                icono_estado = "📞"
+                color_estado = "#ff6b6b"
+                
+                if estado_actual == 'ringing':
+                    icono_estado = "📞"
+                    color_estado = "#ff9800"
+                    estado_visual = "🔔 SONDEANDO"
+                elif estado_actual == 'in-progress':
+                    icono_estado = "✅"
+                    color_estado = "#4caf50"
+                    estado_visual = "📞 EN CONVERSACIÓN"
+                elif estado_actual == 'queued':
+                    icono_estado = "⏱️"
+                    color_estado = "#2196f3"
+                    estado_visual = "⏳ EN COLA"
+                elif estado_actual == 'completed':
+                    icono_estado = "✅"
+                    color_estado = "#4caf50"
+                    estado_visual = "✅ FINALIZADA"
+                elif estado_actual == 'failed':
+                    icono_estado = "❌"
+                    color_estado = "#f44336"
+                    estado_visual = "❌ FALLÓ"
+                elif estado_actual == 'busy':
+                    icono_estado = "📞"
+                    color_estado = "#ff9800"
+                    estado_visual = "📞 OCUPADO"
+                elif estado_actual == 'no-answer':
+                    icono_estado = "📞"
+                    color_estado = "#ff9800"
+                    estado_visual = "📞 NO CONTESTÓ"
+                
                 st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
+                <div style="background: linear-gradient(135deg, {color_estado}, #ee5a24); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);">
                     <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                        <span style="font-size: 28px; margin-right: 15px;">📞</span>
+                        <span style="font-size: 28px; margin-right: 15px;">{icono_estado}</span>
                         <strong style="font-size: 18px;">LLAMADA ACTIVA - MARCADOR</strong>
-                        <span style="margin-left: auto; font-size: 24px;">🔴 EN CURSO</span>
+                        <span style="margin-left: auto; font-size: 24px;">{estado_visual}</span>
                     </div>
                     <div style="font-size: 16px;">
                         <strong>👤 Contacto:</strong> {datos['nombre_completo']}<br>
                         <strong>📱 Teléfono:</strong> {datos['numero_destino']}<br>
                         <strong>🏗️ Constructura:</strong> {datos['constructura']}<br>
                         <strong>🏙️ Municipio:</strong> {datos['municipio']}<br>
-                        <strong>📊 Estado:</strong> {marcador_call.status}<br>
+                        <strong>📊 Estado Twilio:</strong> {estado_actual}<br>
                         <strong>⏰ Inicio:</strong> {datos['inicio'].strftime('%H:%M:%S')}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                if marcador_call.status in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
+                if estado_actual in ['completed', 'failed', 'busy', 'no-answer', 'canceled']:
                     # 🔥 CLASIFICACIÓN INTELIGENTE DEL RESULTADO (MEJORADA)
-                    if marcador_call.status == 'completed':
-                        if hasattr(marcador_call, 'end_time') and hasattr(marcador_call, 'start_time'):
-                            duracion = (datetime.fromisoformat(marcador_call.end_time.replace('Z', '+00:00')) - 
-                                       datetime.fromisoformat(marcador_call.start_time.replace('Z', '+00:00'))).total_seconds()
+                    if estado_actual == 'completed':
+                        if hasattr(llamada_activa, 'end_time') and hasattr(llamada_activa, 'start_time'):
+                            duracion = (datetime.fromisoformat(llamada_activa.end_time.replace('Z', '+00:00')) - 
+                                       datetime.fromisoformat(llamada_activa.start_time.replace('Z', '+00:00'))).total_seconds()
                         else:
                             duracion = 0
                         
@@ -3345,7 +3381,7 @@ with tab_marcador:
                         # 🔥 SIN RERUN para evitar problemas
                         
                 else:
-                    # 🔥 MOSTRAR CONTADOR DE TIEMPO Y BOTONES DE CONTROL
+                    # 🔥 MOSTRAR CONTADOR DE TIEMPO Y BOTONES DE CONTROL (DESDE QUE ACEPTA)
                     hora_bogota = obtener_hora_bogota()
                     tiempo_transcurrido = int((hora_bogota - datos['inicio']).total_seconds())
                     
@@ -3355,6 +3391,9 @@ with tab_marcador:
                     segundos = tiempo_transcurrido % 60
                     tiempo_formateado = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
                     
+                    # 🔥 PANEL DE MONITOREO EN TIEMPO REAL
+                    st.markdown("#### 📊 MONITOREO EN TIEMPO REAL")
+                    
                     # Mostrar contador y estado
                     col_tiempo, col_estado = st.columns([1, 2])
                     with col_tiempo:
@@ -3363,13 +3402,13 @@ with tab_marcador:
                     with col_estado:
                         st.metric("📊 Estado", marcador_call.status.upper())
                     
-                    # 🔥 BOTONES DE CONTROL DE LLAMADA
+                    # 🔥 BOTONES DE CONTROL DE LLAMADA (SIEMPRE VISIBLES)
                     st.markdown("#### 🎛️ Control de Llamada")
                     
                     col_btn1, col_btn2, col_btn3 = st.columns(3)
                     
                     with col_btn1:
-                        if st.button("📞 Finalizar Llamada", key="marcador_finalizar", type="primary"):
+                        if st.button("🔴 FINALIZAR GESTIÓN", key="marcador_finalizar", type="primary"):
                             try:
                                 client.calls(st.session_state.marcador_call_sid).update(status='completed')
                                 st.success("✅ Llamada finalizada manualmente")
@@ -3378,47 +3417,53 @@ with tab_marcador:
                                 st.error(f"❌ Error finalizando llamada: {e}")
                     
                     with col_btn2:
-                        # Botón de pausa de grabación (simulado, ya que la grabación es automática)
-                        if st.button("⏸️ Pausar Grabación", key="marcador_pausar", disabled=True):
+                        # Botón de pausa de grabación (simulado, ya que es automática en Conference Call)
+                        if st.button("⏸️ PAUSAR GRABACIÓN", key="marcador_pausar", disabled=True):
                             st.info("ℹ️ La grabación es automática y no se puede pausar en Conference Call")
                     
                     with col_btn3:
-                        if st.button("🔄 Refrescar Estado", key="marcador_refrescar"):
+                        if st.button("🔄 REFRESCAR ESTADO", key="marcador_refrescar"):
                             # Forzar verificación del estado
                             pass  # El monitoreo se ejecutará automáticamente
                     
-                    # 🔥 INFORMACIÓN ADICIONAL
+                    # 🔥 INFORMACIÓN ADICIONAL SEGÚN ESTADO
+                    if estado_actual == 'ringing':
+                        st.info("📞 Sondeando al cliente... Esperando respuesta")
+                    elif estado_actual == 'in-progress':
+                        st.success("📞 ¡Conversación activa! Ambas partes conectadas")
+                    elif estado_actual == 'queued':
+                        st.info("⏳ Llamada en cola... Procesando conexión")
+                    
+                    # 🔥 INFORMACIÓN TÉCNICA
                     with st.expander("📋 Información técnica de la llamada", expanded=False):
-                        st.write(f"**Call SID:** {st.session_state.marcador_call_sid}")
-                        st.write(f"**From:** {marcador_call.from_}")
-                        st.write(f"**To:** {marcador_call.to}")
-                        st.write(f"**Direction:** {marcador_call.direction}")
-                        st.write(f"**Price:** ${marcador_call.price if marcador_call.price else '0.00'} {marcador_call.price_unit if marcador_call.price_unit else 'USD'}")
-                        if hasattr(marcador_call, 'answered_by') and marcador_call.answered_by:
-                            st.write(f"**Answered by:** {marcador_call.answered_by}")
+                        st.write(f"**Call SID:** {st.session_state.llamada_activa_sid}")
+                        st.write(f"**From:** {llamada_activa.from_}")
+                        st.write(f"**To:** {llamada_activa.to}")
+                        st.write(f"**Direction:** {llamada_activa.direction}")
+                        st.write(f"**Price:** ${llamada_activa.price if llamada_activa.price else '0.00'} {llamada_activa.price_unit if llamada_activa.price_unit else 'USD'}")
+                        if hasattr(llamada_activa, 'answered_by') and llamada_activa.answered_by:
+                            st.write(f"**Answered by:** {llamada_activa.answered_by}")
+                        st.write(f"**Fecha inicio:** {datos['inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
+                        st.write(f"**Tiempo transcurrido:** {tiempo_formateado}")
                     
                     # 🔥 ESCENARIOS ESPECIALES - DETECCIÓN
-                    if marcador_call.status == 'no-answer':
+                    if estado_actual == 'no-answer':
                         st.warning("📞 El cliente no contestó la llamada")
                         
-                    elif marcador_call.status == 'busy':
+                    elif estado_actual == 'busy':
                         st.warning("📞 La línea del cliente está ocupada")
                         
-                    elif marcador_call.status == 'failed':
+                    elif estado_actual == 'failed':
                         st.error("📞 La llamada falló (posiblemente celular apagado o sin cobertura)")
                         
-                    elif marcador_call.status == 'ringing':
+                    elif estado_actual == 'ringing':
                         st.info("📞 Sondeando... Esperando que el cliente conteste")
                         
-                    elif marcador_call.status == 'in-progress':
+                    elif estado_actual == 'in-progress':
                         st.success("📞 Llamada en progreso - Conversación activa")
                         
-                    elif marcador_call.status == 'queued':
+                    elif estado_actual == 'queued':
                         st.info("📞 Llamada en cola...")
-                        
-            except Exception as e:
-                st.error(f"❌ Error verificando estado: {e}")
-                st.session_state.marcador_call_sid = None
         
         else:
             # Botón para iniciar nueva llamada
@@ -3439,6 +3484,59 @@ with tab_marcador:
                 if not municipio.strip():
                     st.error("❌ Debes ingresar el municipio")
                     st.stop()
+                
+                # 🔥 VALIDACIÓN DE PERMISOS INTERNACIONALES (MARCADOR - MEJORADA)
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Número original: '{numero_destino}'")
+                print(f"[DEBUG] 🔥🔥🔅 Marcador: Empieza con '+': {numero_destino.startswith('+')}")
+                print(f"[DEBUG] 🔥🔥🔅 Marcador: Longitud del número: {len(numero_destino)}")
+                
+                # Lógica mejorada para detectar código de país
+                if numero_destino.startswith('+'):
+                    if len(numero_destino) >= 3:
+                        codigo_pais_destino = numero_destino[:3]  # +57, +1, +52, etc.
+                    else:
+                        codigo_pais_destino = numero_destino  # Caso raro, usar todo
+                else:
+                    if len(numero_destino) >= 2:
+                        codigo_pais_destino = numero_destino[:2]  # 57, 1, 52, etc.
+                    else:
+                        codigo_pais_destino = numero_destino  # Caso raro, usar todo
+                
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Código país detectado: '{codigo_pais_destino}'")
+                
+                # 🔥 IMPORTANTE: Para Colombia, siempre usar "57" (sin +) para compatibilidad
+                if codigo_pais_destino in ['+57', '57']:
+                    codigo_pais_destino = "57"
+                elif codigo_pais_destino in ['+1', '1']:
+                    codigo_pais_destino = "1"
+                elif codigo_pais_destino in ['+52', '52']:
+                    codigo_pais_destino = "52"
+                elif codigo_pais_destino in ['+54', '54']:
+                    codigo_pais_destino = "54"
+                
+                print(f"[DEBUG] 🔥🔥🔥 Marcador: Código país normalizado: '{codigo_pais_destino}'")
+                
+                # Países permitidos (configurar según necesidad)
+                paises_permitidos = ['57', '1', '52', '54']  # Solo sin + para sheets
+                print(f"[DEBUG] 🔥🔥🔅 Marcador: Países permitidos: {paises_permitidos}")
+                print(f"[DEBUG] 🔥🔥🔅 Marcador: '{codigo_pais_destino}' en permitidos: {codigo_pais_destino in paises_permitidos}")
+                
+                if codigo_pais_destino not in paises_permitidos:
+                    print(f"[DEBUG] ❌ Marcador: País no permitido: {codigo_pais_destino}")
+                    st.error(f"""❌ **ERROR: País no autorizado para llamadas**
+                    
+**📞 Número:** {numero_destino}
+**🌍 País detectado:** {codigo_pais_destino}
+
+**💡 Soluciones:**
+1. **Habilitar permisos internacionales:** Ve a https://www.twilio.com/console/voice/calls/geo-permissions/low-risk
+2. **Usar número permitido:** Colombia (+57), EE.UU. (+1), México (+52), Argentina (+54)
+3. **Contactar administrador:** Solicitar habilitación del país {codigo_pais_destino}
+
+**⚠️ Esta validación evita errores HTTP 400 de Twilio""")
+                    st.stop()
+                else:
+                    print(f"[DEBUG] ✅ Marcador: País permitido: {codigo_pais_destino}")
                 
                 try:
                     print(f"[DEBUG] 🔥🔥🔥 Marcador: Iniciando llamada a {numero_destino}")
@@ -4574,6 +4672,47 @@ with tab_op:
                                     else:
                                         print(f"[DEBUG] ✅ Número de agente configurado: {st.session_state.numero_celular_agente}")
                                     
+                                    # 🔥 VALIDACIÓN DE PERMISOS INTERNACIONALES (MEJORADA)
+                                    print(f"[DEBUG] 🔥🔥🔥 Número original: '{tel}'")
+                                    print(f"[DEBUG] 🔥🔥🔅 Empieza con '+': {tel.startswith('+')}")
+                                    print(f"[DEBUG] 🔥🔥🔅 Longitud del número: {len(tel)}")
+                                    
+                                    # Lógica mejorada para detectar código de país
+                                    if tel.startswith('+'):
+                                        if len(tel) >= 3:
+                                            codigo_pais_destino = tel[:3]  # +57, +1, +52, etc.
+                                        else:
+                                            codigo_pais_destino = tel  # Caso raro, usar todo
+                                    else:
+                                        if len(tel) >= 2:
+                                            codigo_pais_destino = tel[:2]  # 57, 1, 52, etc.
+                                        else:
+                                            codigo_pais_destino = tel  # Caso raro, usar todo
+                                    
+                                    print(f"[DEBUG] 🔥🔥🔥 Código país detectado: '{codigo_pais_destino}'")
+                                    
+                                    # Países permitidos (configurar según necesidad)
+                                    paises_permitidos = ['+57', '57', '+1', '1', '+52', '52', '+54', '54']  # Colombia, EE.UU., México, Argentina
+                                    print(f"[DEBUG] 🔥🔥🔅 Países permitidos: {paises_permitidos}")
+                                    print(f"[DEBUG] 🔥🔥🔅 '{codigo_pais_destino}' en permitidos: {codigo_pais_destino in paises_permitidos}")
+                                    
+                                    if codigo_pais_destino not in paises_permitidos:
+                                        print(f"[DEBUG] ❌ País no permitido: {codigo_pais_destino}")
+                                        st.error(f"""❌ **ERROR: País no autorizado para llamadas**
+                                        
+**📞 Número:** {tel}
+**🌍 País detectado:** {codigo_pais_destino}
+
+**💡 Soluciones:**
+1. **Habilitar permisos internacionales:** Ve a https://www.twilio.com/console/voice/calls/geo-permissions/low-risk
+2. **Usar número permitido:** Colombia (+57), EE.UU. (+1), México (+52), Argentina (+54)
+3. **Contactar administrador:** Solicitar habilitación del país {codigo_pais_destino}
+
+**⚠️ Esta validación evita errores HTTP 400 de Twilio""")
+                                        st.stop()
+                                    else:
+                                        print(f"[DEBUG] ✅ País permitido: {codigo_pais_destino}")
+                                    
                                     # Crear conference call
                                     print(f"[DEBUG] Iniciando conference call")
                                     conference_name = f"Room_{st.session_state.agente_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -5514,8 +5653,16 @@ with tab_op:
                                     finalizar_manual = False
                                     pausar_grabacion = False
                                     
-                                    # ✅ MOSTRAR BOTONES A PARTIR DE 1 SEGUNDO DURANTE LLAMADA ACTIVA O TIMEOUT
-                                    if (not call_ended_by_system or es_timeout_no_contesta) and mostrar_botones:
+                                    # ✅ MOSTRAR BOTONES A PARTIR DE 1 SEGUNDO DURANTE LLAMADA ACTIVA
+                                    # Mostrar botones si la llamada está activa (no terminada) O si es timeout
+                                    print(f"[DEBUG] 🔥🔥🔥 Verificando mostrar botones:")
+                                    print(f"[DEBUG] 🔥🔥🔥 remote.status: {remote.status}")
+                                    print(f"[DEBUG] 🔥🔥🔥 es_timeout_no_contesta: {es_timeout_no_contesta}")
+                                    print(f"[DEBUG] 🔥🔥🔥 mostrar_botones: {mostrar_botones}")
+                                    print(f"[DEBUG] 🔥🔥🔥 Condición: {(remote.status not in ['completed', 'no-answer', 'busy', 'failed', 'canceled'] or es_timeout_no_contesta) and mostrar_botones}")
+                                    
+                                    if (remote.status not in ['completed', 'no-answer', 'busy', 'failed', 'canceled'] or es_timeout_no_contesta) and mostrar_botones:
+                                        print(f"[DEBUG] 🔥🔥🔥 Mostrando botones de control")
                                         # 🎛️ PANEL DE CONTROL DE LLAMADA
                                         st.markdown("""
                                         <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; border: 2px solid #dee2e6; margin-bottom: 15px;">
