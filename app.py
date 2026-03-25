@@ -2076,9 +2076,25 @@ def generar_reportes_personalizados(df_contactos, df_informe=None):
                         try:
                             # Convertir a numérico, ignorando valores no numéricos
                             duracion_numeric = pd.to_numeric(dia_informe['duracion_seg'], errors='coerce')
-                            duracion_promedio = duracion_numeric.mean()
+                            
+                            # 🔥 FILTRAR VALORES EXTREMOS (evitar números muy grandes como 2085840466364738760486357)
+                            # Considerar duraciones razonables: máximo 2 horas (7200 segundos)
+                            duracion_filtrada = duracion_numeric[
+                                (duracion_numeric.notna()) & 
+                                (duracion_numeric >= 0) & 
+                                (duracion_numeric <= 7200)
+                            ]
+                            
+                            if not duracion_filtrada.empty:
+                                duracion_promedio = duracion_filtrada.mean()
+                            else:
+                                duracion_promedio = 0
+                                
                             if pd.isna(duracion_promedio):
                                 duracion_promedio = 0
+                                
+                            print(f"[DEBUG] Duración promedio calculada: {duracion_promedio}s (de {len(duracion_filtrada)} valores válidos)")
+                            
                         except Exception as e:
                             print(f"[ERROR] Error calculando duración promedio: {e}")
                             duracion_promedio = 0  # Fallback
@@ -3025,8 +3041,16 @@ with tab_reportes:
     except:
         df_informe = pd.DataFrame()
     
-    # Generar reportes personalizados
-    generar_reportes_personalizados(df_contactos, df_informe)
+    # Generar reportes personalizados (con manejo de errores para no bloquear el sistema)
+    try:
+        generar_reportes_personalizados(df_contactos, df_informe)
+        print(f"[DEBUG] Reportes personalizados generados exitosamente")
+    except Exception as e:
+        print(f"[ERROR] Error generando reportes personalizados: {e}")
+        print(f"[WARNING] Los reportes no están disponibles, pero el sistema continúa funcionando")
+        # Mostrar mensaje al usuario pero no bloquear el sistema
+        st.warning("⚠️ Los reportes no están disponibles temporalmente, pero puedes continuar operando normalmente")
+        # Continuar sin reportes para no bloquear el sistema
 
 with tab_sup:
     if st.session_state.agente_id == "12345678":
@@ -4784,6 +4808,16 @@ with tab_op:
                                             final_status = 'Gestionada'
                                             print(f"[DEBUG] Conference - Agente colgó desde celular/tablet - Clasificado como Gestionada")
                                             st.info(f"✅ Llamada gestionada por agente ({duracion_twilio}s)")
+                                        # 🔥 PRIORIDAD ALTA 1.6: Si el agente colgó desde celular/tablet (completed con duración corta pero no contestó)
+                                        elif remote.status == 'completed' and duracion_twilio < 10:
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Conference - Agente colgó desde celular/tablet (corta) - Clasificado como No Contesto")
+                                            st.warning(f"⚠️ Llamada finalizada por agente ({duracion_twilio}s) - Cliente no contestó")
+                                        # 🔥 PRIORIDAD ALTA 1.7: Si el agente colgó desde celular/tablet (completed sin duración registrada)
+                                        elif remote.status == 'completed' and duracion_twilio == 0:
+                                            final_status = 'No Contesto'
+                                            print(f"[DEBUG] Conference - Agente colgó desde celular/tablet (sin duración) - Clasificado como No Contesto")
+                                            st.warning(f"⚠️ Llamada finalizada por agente (sin duración) - Cliente no contestó")
                                         # PRIORIDAD ALTA 2: Número inválido/inexistente (códigos ampliados)
                                         elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
                                             final_status = 'No Contesto'
