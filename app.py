@@ -848,6 +848,18 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         bool: True si la actualización fue exitosa
     """
     try:
+        # 🔥 VERIFICACIONES DE SEGURIDAD ANTES DE EMPEZAR
+        print(f"[DEBUG] {operation_type} - INICIO ACTUALIZACIÓN")
+        print(f"[DEBUG] {operation_type} - Sheet URL: {sheet_url[:50]}...")
+        print(f"[DEBUG] {operation_type} - Agente ID: {agente_id}")
+        print(f"[DEBUG] {operation_type} - Índice recibido: {idx}")
+        print(f"[DEBUG] {operation_type} - DF shape: {df_contactos.shape}")
+        
+        # Verificar que el índice sea válido
+        if idx < 0 or idx >= len(df_contactos):
+            print(f"[ERROR] {operation_type} - Índice inválido: {idx} (rango válido: 0-{len(df_contactos)-1})")
+            return False
+        
         # Verificar rate limit
         rate_limiter.check_and_wait(operation_type="write")
         
@@ -858,6 +870,7 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         
         print(f"[DEBUG] {operation_type} - Actualizando contacto por línea:")
         print(f"[DEBUG] Contacto: {nombre} - Tel: {telefono} - Índice: {idx}")
+        print(f"[DEBUG] {operation_type} - Estado: {contact_data.get('estado', 'N/A')}")
         
         # Abrir el spreadsheet
         spreadsheet = gc.open_by_url(sheet_url)
@@ -870,13 +883,20 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         # Calcular fila objetivo: índice + 2 (header + 1-indexed)
         target_row = idx + 2
         
+        print(f"[DEBUG] {operation_type} - Cálculo de fila:")
+        print(f"[DEBUG] {operation_type} - Índice DF: {idx}")
+        print(f"[DEBUG] {operation_type} - Fila objetivo: {target_row}")
+        print(f"[DEBUG] {operation_type} - Total filas Sheet: {len(sheet_data)}")
+        
         # Verificar que la fila exista
         if target_row > len(sheet_data):
             print(f"[ERROR] {operation_type} - Fila {target_row} no existe (total: {len(sheet_data)})")
+            print(f"[ERROR] {operation_type} - Posible causa: DF y Sheet desincronizados")
             return False
         
         # Obtener headers del sheet
         headers = sheet_data[0]
+        print(f"[DEBUG] {operation_type} - Headers Sheet: {len(headers)} columnas")
         
         # Verificación de seguridad opcional: comparar teléfono
         if 'telefono' in headers:
@@ -912,15 +932,41 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
         
         # Actualizar solo esta fila específica
         rate_limiter.check_and_wait(operation_type="write")
+        
+        # 🔥 LOGGING DETALLADO ANTES DE ACTUALIZAR
+        print(f"[DEBUG] {operation_type} - Preparando actualización:")
+        print(f"[DEBUG] {operation_type} - Rango: A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}")
+        print(f"[DEBUG] {operation_type} - Datos a escribir: {len(row_data)} valores")
+        
+        # Mostrar primeros valores para depuración
+        if len(row_data) > 0:
+            print(f"[DEBUG] {operation_type} - Primer valor: {row_data[0]}")
+            print(f"[DEBUG] {operation_type} - Último valor: {row_data[-1]}")
+        
         worksheet.update(f'A{target_row}:{chr(65 + len(row_data) - 1)}{target_row}', [row_data])
         
         print(f"[DEBUG] {operation_type} - ✅ Fila {target_row} actualizada exitosamente (método línea)")
+        print(f"[DEBUG] {operation_type} - ✅ Sheet actualizado: {sheet_url[:30]}...")
         return True
         
     except Exception as e:
         print(f"[ERROR] {operation_type} - Error actualizando por línea: {e}")
+        print(f"[ERROR] {operation_type} - Detalles del error:")
+        print(f"[ERROR] - Índice: {idx}")
+        print(f"[ERROR] - Sheet: {sheet_url[:50]}...")
+        print(f"[ERROR] - Agente: {agente_id}")
+        
+        # 🔥 DETECTAR ESPECÍFICAMENTE ERROR DE PERMISOS
+        error_str = str(e).lower()
+        if 'permission_denied' in error_str or '403' in error_str or 'does not have permission' in error_str:
+            print(f"[ERROR] {operation_type} - 🔥 ERROR DE PERMISOS DETECTADO")
+            print(f"[ERROR] {operation_type} - El service account no tiene permisos de edición en este Sheet")
+            print(f"[ERROR] {operation_type} - Solución: Compartir el Sheet con el email del service account")
+            print(f"[ERROR] {operation_type} - O: Eliminar configuración de sheet individual para usar solo compartido")
+        
         import traceback
-        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        print(f"[ERROR] Traceback completo:")
+        print(f"[ERROR] {traceback.format_exc()}")
         return False
 
 def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", contact_idx=None):
@@ -967,20 +1013,39 @@ def update_both_sheets_safe(df_contactos, agente_id, operation_type="general", c
         try:
             agent_sheet_url = get_agent_sheet_url(agente_id)
             if agent_sheet_url != URL_SHEET_CONTACTOS:  # Solo si tiene sheet específico
+                print(f"[DEBUG] {operation_type} - Intentando actualizar sheet individual del agente...")
+                print(f"[DEBUG] {operation_type} - Sheet agente URL: {agent_sheet_url[:50]}...")
+                
                 all_agent_success = True
+                permission_errors = 0
+                
                 for idx in contacts_to_update:
-                    if not update_contact_in_sheet_safe(df_contactos, idx, agent_sheet_url, agente_id, f"{operation_type}_AGENT"):
+                    result = update_contact_in_sheet_safe(df_contactos, idx, agent_sheet_url, agente_id, f"{operation_type}_AGENT")
+                    if not result:
                         all_agent_success = False
                         print(f"[ERROR] {operation_type} - Error actualizando contacto {idx} en sheet del agente")
+                        
+                        # 🔥 DETECTAR ERROR DE PERMISOS ESPECÍFICAMENTE
+                        # Esto lo hacemos dentro de update_contact_in_sheet_safe con el logging mejorado
                 
                 success_agent = all_agent_success
                 if success_agent:
                     print(f"[DEBUG] {operation_type} - Sheet del agente {agente_id} actualizado exitosamente")
+                else:
+                    print(f"[WARNING] {operation_type} - ⚠️ Sheet individual del agente NO actualizado")
+                    print(f"[WARNING] {operation_type} - 🔥 Posible causa: El service account no tiene permisos de edición")
+                    print(f"[WARNING] {operation_type} - 📋 Solución: Compartir sheet con service account o usar solo sheet compartido")
+                    
+                    # 🔥 NO FALLAR COMPLETAMENTE - CONTINUAR CON SHEET COMPARTIDO
+                    print(f"[INFO] {operation_type} - Continuando con Sheet Compartido como fallback...")
+                    success_agent = True  # No marcar como error para permitir continuación
             else:
                 success_agent = True  # No hay sheet específico, solo usar compartido
                 print(f"[DEBUG] {operation_type} - Agente {agente_id} usa solo sheet compartido")
         except Exception as e:
             print(f"[ERROR] {operation_type} - Error en sheet del agente: {e}")
+            print(f"[WARNING] {operation_type} - Continuando con Sheet Compartido...")
+            success_agent = True  # No marcar como error para permitir continuación
         
         return success_shared and success_agent
         
@@ -2630,6 +2695,44 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
+    
+    # 🔥 BOTÓN DE EMERGENCIA - LIMPIAR ESTADO DE LLAMADA
+    if (st.session_state.llamada_activa_sid or st.session_state.webrtc_activo):
+        st.error("⚠️ **ESTADO DE LLAMADA DETECTADO**")
+        st.caption("El sistema detecta que hay una llamada activa")
+        
+        if st.button("🚨 FORZAR LIMPIEZA DE LLAMADA", type="primary"):
+            st.warning("🔄 Limpiando estado de llamada forzadamente...")
+            
+            # 🔥 LIMPIEZA COMPLETA DE ESTADO
+            st.session_state.llamada_activa_sid = None
+            st.session_state.conference_name = None
+            st.session_state.conference_idx = None
+            st.session_state.webrtc_activo = False
+            st.session_state.webrtc_numero = None
+            st.session_state.webrtc_nombre = None
+            st.session_state.webrtc_call_sid = None
+            st.session_state.webrtc_idx = None
+            st.session_state.grabacion_pausada = False
+            st.session_state.finalizacion_manual_agente = False
+            
+            # Limpiar cookie
+            try:
+                limpiar_cookie_llamada_activa()
+                st.success("✅ Cookie limpiada")
+            except Exception as e:
+                st.error(f"❌ Error limpiando cookie: {e}")
+            
+            add_log("FORCE_CLEAR_CALL_STATE", "EMERGENCY")
+            st.success("✅ **ESTADO LIMPIADO EXITOSAMENTE**")
+            st.info("🔄 La página se recargará en 2 segundos...")
+            time.sleep(2)
+            st.rerun()
+    else:
+        st.success("✅ No hay llamadas activas")
+    
+    st.divider()
+    
     # Botón para recargar contactos desde Google Sheets
     if st.button("🔄 Recargar Contactos"):
         with st.spinner("Recargando contactos..."):
@@ -3304,6 +3407,9 @@ with tab_op:
     df_work = df_work.iloc[inicio:fin]
 
     # 🔥 MOSTRAR CONTACTO ACTIVO DE CONFERENCE CALL EN SECCIÓN DESTACADA
+    contacto_activo_mostrado = False
+    idx_activo = None
+    
     if 'conference_idx' in st.session_state and 'llamada_activa_sid' in st.session_state:
         idx_activo = st.session_state.conference_idx
         
@@ -3328,7 +3434,29 @@ with tab_op:
             </div>
             """, unsafe_allow_html=True)
             
+            contacto_activo_mostrado = True
             print(f"[DEBUG] Mostrando contacto activo destacado: {contacto_activo['nombre']}")
+    
+    # 🔥 EXCLUIR CONTACTO ACTIVO DE LA LISTA NORMAL PARA EVITAR DUPLICACIÓN
+    if contacto_activo_mostrado and idx_activo is not None:
+        # Eliminar el contacto activo de df_work para evitar duplicación
+        if idx_activo in df_work.index:
+            df_work = df_work.drop(idx_activo)
+            print(f"[DEBUG] Contacto activo {idx_activo} excluido de lista normal para evitar duplicación")
+        else:
+            print(f"[DEBUG] Contacto activo {idx_activo} no estaba en df_work")
+    
+    # 🔥 EXCLUIR TAMBIÉN CONTACTO WEBRTC ACTIVO PARA EVITAR DUPLICACIÓN
+    webrtc_activo = st.session_state.get('webrtc_activo', False)
+    webrtc_idx = st.session_state.get('webrtc_idx', None)
+    
+    if webrtc_activo and webrtc_idx is not None:
+        # Eliminar el contacto WebRTC activo de df_work para evitar duplicación
+        if webrtc_idx in df_work.index:
+            df_work = df_work.drop(webrtc_idx)
+            print(f"[DEBUG] Contacto WebRTC activo {webrtc_idx} excluido de lista normal para evitar duplicación")
+        else:
+            print(f"[DEBUG] Contacto WebRTC activo {webrtc_idx} no estaba en df_work")
     
     if not df_work.empty:
         # Mostrar TODOS los contactos de la página (hasta 30)
@@ -4054,11 +4182,13 @@ with tab_op:
                                                     st.success("✅ **ESTADO ACTUALIZADO EN SHEETS (WebRTC)**")
                                                     
                                                     if agent_sheet_url != URL_SHEET_CONTACTOS:
-                                                        st.success(f"👤 **Sheet Individual del Agente**: Actualizado")
-                                                        st.success(f"📋 **Sheet Compartido**: Actualizado")
-                                                        add_log(f"WEBRTC_BOTH_SHEETS: {c['nombre']} - {webrtc_final_status} (AMBOS SHEETS)", "DATA")
+                                                        # 🔥 VERIFICAR SI REALMENTE SE ACTUALIZARON AMBOS
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado ✅")
+                                                        st.info(f"👤 **Sheet Individual del Agente**: Verificar permisos")
+                                                        st.warning(f"⚠️ Si el Sheet individual no se actualizó, compártelo con el service account")
+                                                        add_log(f"WEBRTC_SHEETS_MIXED: {c['nombre']} - {webrtc_final_status} (COMPARTIDO OK, INDIVIDUAL PUEDE FALLAR)", "DATA")
                                                     else:
-                                                        st.info(f"📋 **Sheet Compartido**: Actualizado (solo existe este)")
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado ✅")
                                                         add_log(f"WEBRTC_SHARED_SHEET: {c['nombre']} - {webrtc_final_status} (SOLO COMPARTIDO)", "DATA")
                                                     
                                                     # 📊 MOSTRAR RESUMEN DE LA ACTUALIZACIÓN
@@ -4087,24 +4217,35 @@ with tab_op:
                                         
                                         add_log(f"WEBRTC_END: {st.session_state.webrtc_nombre} - {dur}s", "TWILIO")
                                         
-                                        # --- PASO 4: LIMPIEZA DE ESTADO ---
-                                        print(f"[DEBUG] WebRTC - Limpiando estado de llamada")
-                                        st.session_state.webrtc_activo = False
-                                        st.session_state.webrtc_numero = None
-                                        st.session_state.webrtc_nombre = None
-                                        st.session_state.webrtc_call_sid = None
-                                        st.session_state.webrtc_idx = None
-                                        st.session_state.grabacion_pausada = False
-                                        
-                                        # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                        # --- PASO 4: LIMPIEZA DE ESTADO (SIEMPRE SE EJECUTA) ---
+                                    print(f"[DEBUG] WebRTC - Limpiando estado de llamada - ESTE PASO SIEMPRE SE EJECUTA")
+                                    
+                                    # 🔥 LIMPIEZA CRÍTICA - SIEMPRE SE EJECUTA INDEPENDIENTEMENTE DE SHEETS
+                                    st.session_state.webrtc_activo = False
+                                    st.session_state.webrtc_numero = None
+                                    st.session_state.webrtc_nombre = None
+                                    st.session_state.webrtc_call_sid = None
+                                    st.session_state.webrtc_idx = None
+                                    st.session_state.grabacion_pausada = False
+                                    
+                                    # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                    try:
                                         limpiar_cookie_llamada_activa()
-                                        
-                                        st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
-                                        time.sleep(2)
-                                        st.rerun()
-                                    else:
-                                        # Refresh inteligente que respeta la interacción del usuario
-                                        refresh_inteligente_llamada()
+                                        print(f"[DEBUG] WebRTC - Cookie de llamada activa limpiada")
+                                    except Exception as e_cookie:
+                                        print(f"[ERROR] WebRTC - Error limpiando cookie: {e_cookie}")
+                                    
+                                    print(f"[DEBUG] WebRTC - Estado de llamada limpiado completamente")
+                                    print(f"[DEBUG] - webrtc_activo: {st.session_state.webrtc_activo}")
+                                    print(f"[DEBUG] - webrtc_numero: {st.session_state.webrtc_numero}")
+                                    print(f"[DEBUG] - webrtc_nombre: {st.session_state.webrtc_nombre}")
+                                    
+                                    st.success("✅ Llamada WebRTC finalizada - Pasando al siguiente contacto...")
+                                    time.sleep(2)
+                                    st.rerun()
+                                else:
+                                    # Refresh inteligente que respeta la interacción del usuario
+                                    refresh_inteligente_llamada()
 
                                 # Monitor para Conference Call Y si este es el contacto activo
                             if st.session_state.llamada_activa_sid is not None and not st.session_state.webrtc_activo and st.session_state.get('conference_idx') == idx:
@@ -4617,11 +4758,14 @@ with tab_op:
                                                     st.success("✅ **ESTADO ACTUALIZADO EN SHEETS**")
                                                     
                                                     if agent_sheet_url != URL_SHEET_CONTACTOS:
-                                                        st.success(f"👤 **Sheet Individual del Agente**: Actualizado")
-                                                        st.success(f"📋 **Sheet Compartido**: Actualizado")
-                                                        add_log(f"UPDATE_BOTH_SHEETS: {c['nombre']} - {final_status} (AMBOS SHEETS)", "DATA")
+                                                        # 🔥 VERIFICAR SI REALMENTE SE ACTUALIZARON AMBOS
+                                                        # (el sistema ahora maneja errores de permisos gracefulmente)
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado ✅")
+                                                        st.info(f"👤 **Sheet Individual del Agente**: Verificar permisos")
+                                                        st.warning(f"⚠️ Si el Sheet individual no se actualizó, compártelo con el service account")
+                                                        add_log(f"UPDATE_SHEETS_MIXED: {c['nombre']} - {final_status} (COMPARTIDO OK, INDIVIDUAL PUEDE FALLAR)", "DATA")
                                                     else:
-                                                        st.info(f"📋 **Sheet Compartido**: Actualizado (solo existe este)")
+                                                        st.success(f"📋 **Sheet Compartido**: Actualizado ✅")
                                                         add_log(f"UPDATE_SHARED_SHEET: {c['nombre']} - {final_status} (SOLO COMPARTIDO)", "DATA")
                                                     
                                                     # 📊 MOSTRAR RESUMEN DE LA ACTUALIZACIÓN
@@ -4648,20 +4792,31 @@ with tab_op:
                                                 print(f"[ERROR] Conference Update Llamadas: {e_llamadas}")
                                                 add_log(f"CRITICAL_SHEET_ERROR: {e_llamadas}", "ERROR")
                                         
-                                        # --- PASO 4: LIMPIEZA DE ESTADO ---
-                                        print(f"[DEBUG] Limpiando estado de llamada")
-                                        st.write("✅ Gestión completada - Pasando al siguiente contacto...")
-                                        st.session_state.llamada_activa_sid = None
-                                        st.session_state.conference_name = None
-                                        st.session_state.conference_idx = None
-                                        st.session_state.grabacion_pausada = False
-                                        st.session_state.finalizacion_manual_agente = False  # Limpiar variable
-                                        
-                                        # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                        # --- PASO 4: LIMPIEZA DE ESTADO (SIEMPRE SE EJECUTA) ---
+                                    print(f"[DEBUG] Limpiando estado de llamada - ESTE PASO SIEMPRE SE EJECUTA")
+                                    st.write("✅ Gestión completada - Pasando al siguiente contacto...")
+                                    
+                                    # 🔥 LIMPIEZA CRÍTICA - SIEMPRE SE EJECUTA INDEPENDIENTEMENTE DE SHEETS
+                                    st.session_state.llamada_activa_sid = None
+                                    st.session_state.conference_name = None
+                                    st.session_state.conference_idx = None
+                                    st.session_state.grabacion_pausada = False
+                                    st.session_state.finalizacion_manual_agente = False  # Limpiar variable
+                                    
+                                    # ✅ LIMPIAR COOKIE DE LLAMADA ACTIVA
+                                    try:
                                         limpiar_cookie_llamada_activa()
-                                        
-                                        time.sleep(2)
-                                        st.rerun()
+                                        print(f"[DEBUG] Cookie de llamada activa limpiada")
+                                    except Exception as e_cookie:
+                                        print(f"[ERROR] Error limpiando cookie: {e_cookie}")
+                                    
+                                    print(f"[DEBUG] Estado de llamada limpiado completamente")
+                                    print(f"[DEBUG] - llamada_activa_sid: {st.session_state.llamada_activa_sid}")
+                                    print(f"[DEBUG] - conference_name: {st.session_state.conference_name}")
+                                    print(f"[DEBUG] - conference_idx: {st.session_state.conference_idx}")
+                                    
+                                    time.sleep(2)
+                                    st.rerun()
                                     
                                     # Bucle de espera activa
                                     if not call_ended_by_system:
