@@ -665,6 +665,13 @@ def get_spreadsheet_contactos():
     return st.session_state.spreadsheet_contactos
 
 # --- 2. FUNCIONES HELPER PARA GOOGLE SHEETS ---
+
+def asignar_codigo_pais_defecto():
+    """
+    Siempre retorna "57" (Colombia) como código de país por defecto.
+    """
+    return "57"
+
 def read_sheet(worksheet_name="0"):
     """Lee datos de Google Sheets usando gspread"""
     try:
@@ -1046,8 +1053,18 @@ def update_contact_in_sheet_safe(df_contactos, idx, sheet_url, agente_id, operat
                     val = contact_data[df_col]
                     break
             
-            # Convertir a string seguro
-            val_str = str(val) if val is not None and str(val) != 'nan' else ''
+            # Convertir a string seguro con protección especial para codigo_pais
+            if header.lower() == 'codigo_pais':
+                # Para codigo_pais, si está vacío o nulo, asignar "57" por defecto
+                if val is None or str(val) == 'nan' or str(val).strip() == '':
+                    val_str = asignar_codigo_pais_defecto()
+                    print(f"[DEBUG] {operation_type} - codigo_pais vacío, asignado '57' por defecto")
+                else:
+                    val_str = str(val).strip()
+                    print(f"[DEBUG] {operation_type} - codigo_pais preservado: '{val_str}'")
+            else:
+                # Para otros campos, comportamiento normal
+                val_str = str(val) if val is not None and str(val) != 'nan' else ''
             row_data.append(val_str)
         
         print(f"[DEBUG] {operation_type} - Preparando actualización fila {target_row}")
@@ -1260,6 +1277,28 @@ def cargar_contactos_agente(cedula_agente, preserve_local_changes=True):
         
         # Reordenar columnas para que coincidan con el orden requerido
         df_todos = df_todos[columnas_requeridas]
+        
+        # 🔥 VALIDACIÓN Y AUTOCOMPLETADO DE codigo_pais
+        if 'codigo_pais' in df_todos.columns:
+            print(f"[DEBUG] 🔥 Validando campo codigo_pais en {len(df_todos)} contactos...")
+            contactos_con_codigo_pais_vacio = 0
+            
+            for idx, row in df_todos.iterrows():
+                codigo_pais_actual = row['codigo_pais']
+                
+                if pd.isna(codigo_pais_actual) or codigo_pais_actual == '' or codigo_pais_actual is None:
+                    # Asignar "57" por defecto
+                    df_todos.at[idx, 'codigo_pais'] = asignar_codigo_pais_defecto()
+                    contactos_con_codigo_pais_vacio += 1
+                    print(f"[DEBUG] Contacto {idx}: codigo_pais vacío, asignado '57' por defecto")
+            
+            if contactos_con_codigo_pais_vacio > 0:
+                print(f"[DEBUG] 🔥 Se asignaron {contactos_con_codigo_pais_vacio} códigos de país '57' automáticamente")
+                add_log(f"CODIGO_PAIS_AUTOCOMPLETADO: {contactos_con_codigo_pais_vacio} contactos con '57'", "DATA")
+            else:
+                print(f"[DEBUG] 🔥 Todos los contactos ya tienen codigo_pais definido")
+        else:
+            print(f"[WARNING] Columna codigo_pais no encontrada en DataFrame")
         
         # RELLENO AUTOMÁTICO INTELIGENTE DE ESTADO
         # Solo rellenar 'Pendiente' si la fila tiene datos válidos (nombre, telefono, cedula_agente)
@@ -3134,6 +3173,19 @@ with tab_marcador:
                             st.session_state.df_contactos.at[idx, 'duracion_seg'] = str(int(duracion))
                             st.session_state.df_contactos.at[idx, 'fecha_llamada'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             
+                            # 🔥 PROTEGER CAMPO codigo_pais - NO ELIMINAR
+                            if 'codigo_pais' in st.session_state.df_contactos.columns:
+                                codigo_pais_actual = st.session_state.df_contactos.at[idx, 'codigo_pais']
+                                
+                                if pd.isna(codigo_pais_actual) or codigo_pais_actual == '' or codigo_pais_actual is None:
+                                    # Si está vacío, asignar "57" por defecto
+                                    st.session_state.df_contactos.at[idx, 'codigo_pais'] = asignar_codigo_pais_defecto()
+                                    print(f"[DEBUG] 🔥🔥🔥 codigo_pais vacío, asignado '57' por defecto")
+                                else:
+                                    print(f"[DEBUG] 🔥🔥🔥 codigo_pais preservado: '{codigo_pais_actual}'")
+                            else:
+                                print(f"[WARNING] 🔥🔥🔥 Columna codigo_pais no encontrada en DataFrame")
+                            
                             # Guardar en sheets
                             if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "MONITOREO_AUTO", contact_idx=idx):
                                 print(f"[DEBUG] 🔥🔥🔥 Guardado automático exitoso")
@@ -3203,7 +3255,7 @@ with tab_marcador:
                     estado_actual = "desconocido"
                 
                 # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA CON ESTADO VISUAL
-                datos = st.session_state.marcador_datos if 'marcador_datos' in st.session_state else {}
+                datos = st.session_state.marcador_datos if 'marcador_datos' in st.session_state and st.session_state.marcador_datos else {}
                 estado_visual = estado_actual.upper()
                 icono_estado = "📞"
                 color_estado = "#ff6b6b"
@@ -3245,12 +3297,12 @@ with tab_marcador:
                         <span style="margin-left: auto; font-size: 24px;">{estado_visual}</span>
                     </div>
                     <div style="font-size: 16px;">
-                        <strong>👤 Contacto:</strong> {datos['nombre_completo']}<br>
-                        <strong>📱 Teléfono:</strong> {datos['numero_destino']}<br>
-                        <strong>🏗️ Constructura:</strong> {datos['constructura']}<br>
-                        <strong>🏙️ Municipio:</strong> {datos['municipio']}<br>
+                        <strong>👤 Contacto:</strong> {datos.get('nombre_completo', 'N/A')}<br>
+                        <strong>📱 Teléfono:</strong> {datos.get('numero_destino', 'N/A')}<br>
+                        <strong>🏗️ Constructura:</strong> {datos.get('constructura', 'N/A')}<br>
+                        <strong>🏙️ Municipio:</strong> {datos.get('municipio', 'N/A')}<br>
                         <strong>📊 Estado Twilio:</strong> {estado_actual}<br>
-                        <strong>⏰ Inicio:</strong> {datos['inicio'].strftime('%H:%M:%S')}
+                        <strong>⏰ Inicio:</strong> {datos['inicio'].strftime('%H:%M:%S') if datos and 'inicio' in datos else 'N/A'}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -3383,9 +3435,12 @@ with tab_marcador:
                         
                 else:
                     # 🔥 MOSTRAR CONTADOR DE TIEMPO Y BOTONES DE CONTROL (DESDE QUE ACEPTA)
-                    datos = st.session_state.marcador_datos
+                    datos = st.session_state.marcador_datos if 'marcador_datos' in st.session_state and st.session_state.marcador_datos else {}
                     hora_bogota = obtener_hora_bogota()
-                    tiempo_transcurrido = int((hora_bogota - datos['inicio']).total_seconds())
+                    if datos and 'inicio' in datos:
+                        tiempo_transcurrido = int((hora_bogota - datos['inicio']).total_seconds())
+                    else:
+                        tiempo_transcurrido = 0
                     
                     # Formatear tiempo
                     horas = tiempo_transcurrido // 3600
@@ -3445,7 +3500,8 @@ with tab_marcador:
                         st.write(f"**Price:** ${llamada_activa.price if llamada_activa.price else '0.00'} {llamada_activa.price_unit if llamada_activa.price_unit else 'USD'}")
                         if hasattr(llamada_activa, 'answered_by') and llamada_activa.answered_by:
                             st.write(f"**Answered by:** {llamada_activa.answered_by}")
-                        st.write(f"**Fecha inicio:** {datos['inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
+                        if datos and 'inicio' in datos:
+                            st.write(f"**Fecha inicio:** {datos['inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
                         st.write(f"**Tiempo transcurrido:** {tiempo_formateado}")
                     
                     # 🔥 ESCENARIOS ESPECIALES - DETECCIÓN
@@ -3864,7 +3920,12 @@ def guardar_marcador_en_sheet_agente(datos_marcador, duracion_segundos, estado_f
 # Función para monitorear y guardar cuando termina la llamada del marcador (MEJORADA)
 def monitorear_y_guardar_marcador():
     """Monitorea el estado de la llamada del marcador y guarda cuando termina - ROBUSTO"""
-    if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
+    try:
+        if 'marcador_call_sid' not in st.session_state or 'marcador_datos' not in st.session_state:
+            return
+        
+        if not st.session_state.marcador_call_sid or not st.session_state.marcador_datos:
+            return
         try:
             # 🔥 VERIFICAR ESTADO REAL EN TWILIO (IGUAL QUE SISTEMA PRINCIPAL)
             marcador_call = client.calls(st.session_state.marcador_call_sid).fetch()
@@ -3959,22 +4020,32 @@ def monitorear_y_guardar_marcador():
             st.session_state.marcador_call_sid = None
             st.session_state.marcador_datos = {}
             print(f"[DEBUG] 🔥🔥🔥 Marcador: Estado limpiado por error de monitoreo")
+    
+    except Exception as e:
+        print(f"[ERROR] Marcador: Error general en monitoreo_y_guardar_marcador: {e}")
+        import traceback
+        print(traceback.format_exc())
+        # Si hay error general, limpiar estado para evitar bloqueos
+        if 'marcador_call_sid' in st.session_state:
+            st.session_state.marcador_call_sid = None
+        if 'marcador_datos' in st.session_state:
+            st.session_state.marcador_datos = {}
 
 # Mostrar resumen de la última llamada si hay datos
     if st.session_state.marcador_datos and st.session_state.marcador_call_sid is None:
         st.divider()
         st.subheader("📋 Última Llamada Realizada")
         
-        datos = st.session_state.marcador_datos
+        datos = st.session_state.marcador_datos if 'marcador_datos' in st.session_state and st.session_state.marcador_datos else {}
         col_info1, col_info2, col_info3 = st.columns(3)
         
         with col_info1:
-            st.metric("👤 Contacto", datos['nombre_completo'])
-            st.metric("📱 Teléfono", datos['numero_destino'])
+            st.metric("👤 Contacto", datos.get('nombre_completo', 'N/A'))
+            st.metric("📱 Teléfono", datos.get('numero_destino', 'N/A'))
         
         with col_info2:
-            st.metric("🏗️ Constructura", datos['constructura'])
-            st.metric("🏙️ Municipio", datos['municipio'])
+            st.metric("🏗️ Constructura", datos.get('constructura', 'N/A'))
+            st.metric("🏙️ Municipio", datos.get('municipio', 'N/A'))
         
         with col_info3:
             if 'inicio' in datos:
@@ -5262,6 +5333,19 @@ with tab_op:
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.webrtc_call_sid or ''
                                         
+                                        # 🔥 PROTEGER CAMPO codigo_pais - NO ELIMINAR
+                                        if 'codigo_pais' in st.session_state.df_contactos.columns:
+                                            codigo_pais_actual = st.session_state.df_contactos.at[idx, 'codigo_pais']
+                                            
+                                            if pd.isna(codigo_pais_actual) or codigo_pais_actual == '' or codigo_pais_actual is None:
+                                                # Si está vacío, asignar "57" por defecto
+                                                st.session_state.df_contactos.at[idx, 'codigo_pais'] = asignar_codigo_pais_defecto()
+                                                print(f"[DEBUG] 🔥🔥🔥 WebRTC - codigo_pais vacío, asignado '57' por defecto")
+                                            else:
+                                                print(f"[DEBUG] 🔥🔥🔥 WebRTC - codigo_pais preservado: '{codigo_pais_actual}'")
+                                        else:
+                                            print(f"[WARNING] 🔥🔥🔥 WebRTC - Columna codigo_pais no encontrada en DataFrame")
+                                        
                                         # Marcar como gestionado en campo adicional (si existe) o mantener estado original
                                         # El estado real (Llamado/No Contesto) se mantiene en 'estado'
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {webrtc_final_status}")
@@ -5896,6 +5980,19 @@ with tab_op:
                                         st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
                                         st.session_state.df_contactos.at[idx, 'fecha_llamada'] = t_fin.strftime("%Y-%m-%d %H:%M:%S")
                                         st.session_state.df_contactos.at[idx, 'sid_llamada'] = st.session_state.llamada_activa_sid
+                                        
+                                        # 🔥 PROTEGER CAMPO codigo_pais - NO ELIMINAR
+                                        if 'codigo_pais' in st.session_state.df_contactos.columns:
+                                            codigo_pais_actual = st.session_state.df_contactos.at[idx, 'codigo_pais']
+                                            
+                                            if pd.isna(codigo_pais_actual) or codigo_pais_actual == '' or codigo_pais_actual is None:
+                                                # Si está vacío, asignar "57" por defecto
+                                                st.session_state.df_contactos.at[idx, 'codigo_pais'] = asignar_codigo_pais_defecto()
+                                                print(f"[DEBUG] 🔥🔥🔥 Conference - codigo_pais vacío, asignado '57' por defecto")
+                                            else:
+                                                print(f"[DEBUG] 🔥🔥🔥 Conference - codigo_pais preservado: '{codigo_pais_actual}'")
+                                        else:
+                                            print(f"[WARNING] 🔥🔥🔥 Conference - Columna codigo_pais no encontrada en DataFrame")
                                         
                                         print(f"[DEBUG] DataFrame local actualizado. Estado: {final_status}")
                                         
