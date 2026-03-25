@@ -4138,6 +4138,11 @@ with tab_op:
                                         if st.session_state.get('finalizacion_manual_agente', False):
                                             final_status = 'Gestionada'
                                             print(f"[DEBUG] Conference - Finalización manual por agente - Clasificado como Gestionada")
+                                        # PRIORIDAD ALTA 1.5: Si el agente colgó desde celular/tablet (completed con duración significativa)
+                                        elif remote.status == 'completed' and duracion_twilio >= 10:
+                                            final_status = 'Gestionada'
+                                            print(f"[DEBUG] Conference - Agente colgó desde celular/tablet - Clasificado como Gestionada")
+                                            st.info(f"✅ Llamada gestionada por agente ({duracion_twilio}s)")
                                         # PRIORIDAD ALTA 2: Número inválido/inexistente (códigos ampliados)
                                         elif remote.status == 'failed' and error_code in ['21217', '21214', '21211', '21612', '30001', '30003']:
                                             final_status = 'No Contesto'
@@ -4181,11 +4186,17 @@ with tab_op:
                                         # Caso 3: Contestó persona - Validación de duración
                                         elif answered_by == 'human':
                                             if duracion_twilio >= 300:  # 5 minutos o más
+                                                final_status = 'Gestionada'  # Conversación larga = gestionada
                                                 st.info(f"📞 Conversación larga detectada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
-                                                print(f"[DEBUG] Conference - Conversación larga: {duracion_twilio}s")
-                                            final_status = 'Llamado'
-                                            st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
-                                            print(f"[DEBUG] Conference - Detectado como humano - Duración: {duracion_twilio}s")
+                                                print(f"[DEBUG] Conference - Conversación larga gestionada: {duracion_twilio}s")
+                                            elif duracion_twilio >= 30:  # 30 segundos o más = conversación real
+                                                final_status = 'Gestionada'  # Conversación real = gestionada
+                                                st.success(f"✅ Conversación establecida ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Conference - Conversación real gestionada: {duracion_twilio}s")
+                                            else:
+                                                final_status = 'Llamado'  # Conversación muy corta
+                                                st.success(f"✅ Llamada contestada por persona ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Conference - Detectado como humano - Duración: {duracion_twilio}s")
                                         
                                         # PRIORIDAD ALTA 2: Cliente colgó inmediatamente vs No contestó (casos especiales de duración)
                                         elif remote.status == 'completed' and answered_by == 'unknown':
@@ -4202,17 +4213,21 @@ with tab_op:
                                                 st.warning(f"⚠️ Llamada muy corta ({duracion_twilio}s) - Probablemente no contestó")
                                                 print(f"[DEBUG] Conference - Duración muy corta: {duracion_twilio}s")
                                             elif duracion_twilio == 10:
-                                                final_status = 'Llamado'
+                                                final_status = 'Llamado'  # Exactamente 10s = muy corta
                                                 st.info(f"⚖️ Llamada en límite exacto (10s) - Clasificada como Llamado")
                                                 print(f"[DEBUG] Conference - Duración límite exacto: 10s")
                                             elif duracion_twilio >= 300:  # 5 minutos o más
-                                                final_status = 'Llamado'
-                                                st.success(f"✅ Conversación larga ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
-                                                print(f"[DEBUG] Conference - Conversación larga: {duracion_twilio}s")
+                                                final_status = 'Gestionada'  # Conversación larga = gestionada
+                                                st.success(f"✅ Conversación larga gestionada ({duracion_twilio}s = {duracion_twilio//60}min {duracion_twilio%60}s)")
+                                                print(f"[DEBUG] Conference - Conversación larga gestionada: {duracion_twilio}s")
+                                            elif duracion_twilio >= 30:  # 30 segundos o más
+                                                final_status = 'Gestionada'  # Conversación real = gestionada
+                                                st.success(f"✅ Conversación gestionada ({duracion_twilio}s)")
+                                                print(f"[DEBUG] Conference - Conversación gestionada: {duracion_twilio}s")
                                             else:
-                                                final_status = 'Llamado'
-                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación establecida")
-                                                print(f"[DEBUG] Conference - Conversación establecida: {duracion_twilio}s")
+                                                final_status = 'Llamado'  # 11-29 segundos = corta
+                                                st.success(f"✅ Llamada completada ({duracion_twilio}s) - Conversación corta")
+                                                print(f"[DEBUG] Conference - Conversación corta: {duracion_twilio}s")
                                         
                                         # Caso por defecto
                                         else:
@@ -4220,6 +4235,20 @@ with tab_op:
                                             print(f"[DEBUG] Conference - Clasificado como Llamado por defecto")
                                         
                                         print(f"[DEBUG] Estado final determinado: {final_status}")
+                                        
+                                        # 📊 MENSAJE CLARO PARA EL AGENTE
+                                        if final_status == 'Gestionada':
+                                            st.success(f"✅ CONTACTO GESTIONADO - Cambiará a la sección 'Gestionadas'")
+                                            if st.session_state.get('finalizacion_manual_agente', False):
+                                                st.info("🔹 Finalizado por: Botón 'FINALIZAR GESTIÓN'")
+                                            elif remote.status == 'completed' and duracion_twilio >= 10:
+                                                st.info("🔹 Finalizado por: Agente colgó desde celular/tablet")
+                                            elif answered_by == 'human' and duracion_twilio >= 30:
+                                                st.info("🔹 Finalizado por: Conversación real establecida")
+                                        elif final_status == 'Llamado':
+                                            st.warning("⚠️ CONTACTO LLAMADO - Permanecerá en 'Pendientes' (conversación corta)")
+                                        elif final_status == 'No Contesto':
+                                            st.warning("⚠️ NO CONTESTÓ - Permanecerá en 'Pendientes'")
                                         
                                         # Calculamos duración
                                         t_fin = datetime.now()
