@@ -3130,7 +3130,9 @@ with tab_marcador:
     
     # 🔥 MONITOREO AUTOMÁTICO DEL MARCADOR
     # Verificar si hay una llamada activa que necesita ser monitoreada
-    if st.session_state.marcador_call_sid and st.session_state.marcador_datos:
+    # PERO SOLO SI NO HAY LLAMADA DE CONFERENCE ACTIVA (para evitar interferencias)
+    if (st.session_state.marcador_call_sid and st.session_state.marcador_datos and 
+        not st.session_state.llamada_activa_sid):
         monitorear_y_guardar_marcador()
     
     # 🔥 MONITOREO AUTOMÁTICO DE LLAMADAS PRINCIPALES (CRÍTICO)
@@ -3251,7 +3253,9 @@ with tab_marcador:
                 try:
                     llamada_activa = client.calls(st.session_state.llamada_activa_sid).fetch()
                     estado_actual = llamada_activa.status
-                except:
+                except Exception as e:
+                    print(f"[ERROR] Error obteniendo llamada activa: {e}")
+                    llamada_activa = None
                     estado_actual = "desconocido"
                 
                 # 🔥 MOSTRAR PANEL DE LLAMADA ACTIVA CON ESTADO VISUAL
@@ -3494,12 +3498,19 @@ with tab_marcador:
                     # 🔥 INFORMACIÓN TÉCNICA
                     with st.expander("📋 Información técnica de la llamada", expanded=False):
                         st.write(f"**Call SID:** {st.session_state.llamada_activa_sid}")
-                        st.write(f"**From:** {llamada_activa.from_}")
-                        st.write(f"**To:** {llamada_activa.to}")
-                        st.write(f"**Direction:** {llamada_activa.direction}")
-                        st.write(f"**Price:** ${llamada_activa.price if llamada_activa.price else '0.00'} {llamada_activa.price_unit if llamada_activa.price_unit else 'USD'}")
-                        if hasattr(llamada_activa, 'answered_by') and llamada_activa.answered_by:
-                            st.write(f"**Answered by:** {llamada_activa.answered_by}")
+                        
+                        if llamada_activa:
+                            st.write(f"**From:** {getattr(llamada_activa, 'from_', 'N/A')}")
+                            st.write(f"**To:** {getattr(llamada_activa, 'to', 'N/A')}")
+                            st.write(f"**Direction:** {getattr(llamada_activa, 'direction', 'N/A')}")
+                            st.write(f"**Price:** ${getattr(llamada_activa, 'price', '0.00') or '0.00'} {getattr(llamada_activa, 'price_unit', 'USD')}")
+                            if hasattr(llamada_activa, 'answered_by') and llamada_activa.answered_by:
+                                st.write(f"**Answered by:** {llamada_activa.answered_by}")
+                        else:
+                            st.write("**From:** N/A")
+                            st.write("**To:** N/A")
+                            st.write("**Direction:** N/A")
+                            st.write("**Price:** $0.00 USD")
                         if datos and 'inicio' in datos:
                             st.write(f"**Fecha inicio:** {datos['inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
                         st.write(f"**Tiempo transcurrido:** {tiempo_formateado}")
