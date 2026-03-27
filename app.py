@@ -225,15 +225,38 @@ def recuperar_llamada_activa_desde_cookie():
     return None
 
 def verificar_llamada_activa_en_twilio(llamada_sid):
-    """Verifica si una llamada sigue activa en Twilio"""
+    """Verifica si una llamada sigue activa en Twilio - MEJORADA"""
     try:
         if not llamada_sid:
+            print(f"[PERSISTENCE] No hay llamada_sid para verificar")
             return False
         
+        print(f"[PERSISTENCE] Verificando llamada {llamada_sid} en Twilio...")
         call = client.calls(llamada_sid).fetch()
-        return call.status in ['in-progress', 'queued', 'ringing']
+        estado_actual = call.status
+        
+        print(f"[PERSISTENCE] Estado real en Twilio: {estado_actual}")
+        
+        # Estados que indican que la llamada está realmente activa
+        estados_activos = ['in-progress', 'queued', 'ringing']
+        
+        # Estados que indican que la llamada terminó
+        estados_terminados = ['completed', 'no-answer', 'busy', 'failed', 'canceled']
+        
+        if estado_actual in estados_activos:
+            print(f"[PERSISTENCE] ✅ Llamada {llamada_sid} está ACTIVA ({estado_actual})")
+            return True
+        elif estado_actual in estados_terminados:
+            print(f"[PERSISTENCE] ❌ Llamada {llamada_sid} está TERMINADA ({estado_actual})")
+            return False
+        else:
+            print(f"[PERSISTENCE] ⚠️ Llamada {llamada_sid} en estado desconocido: {estado_actual}")
+            # Por seguridad, si el estado es desconocido, no la consideramos activa
+            return False
+            
     except Exception as e:
         print(f"[PERSISTENCE] Error verificando llamada en Twilio: {e}")
+        # Si hay error verificando, asumimos que no está activa para evitar atascamiento
         return False
 
 def restaurar_llamada_activa():
@@ -2631,6 +2654,34 @@ if st.session_state.agente_id and not st.session_state.llamada_activa_sid and no
     else:
         print(f"[PERSISTENCE] No hay llamadas activas para restaurar")
 
+# 🔥 NUEVO: LIMPIEZA AUTOMÁTICA SI HAY LLAMADA ACTIVA PERO TERMINADA
+elif st.session_state.agente_id and st.session_state.llamada_activa_sid:
+    print(f"[PERSISTENCE] Verificando si llamada activa {st.session_state.llamada_activa_sid} realmente está activa...")
+    
+    # Verificar estado real en Twilio
+    if not verificar_llamada_activa_en_twilio(st.session_state.llamada_activa_sid):
+        print(f"[PERSISTENCE] ❌ Llamada {st.session_state.llamada_activa_sid} está terminada en Twilio, limpiando estado local...")
+        
+        # Limpiar estado automáticamente
+        st.session_state.llamada_activa_sid = None
+        st.session_state.conference_name = None
+        st.session_state.conference_idx = None
+        st.session_state.t_inicio_dt = None
+        st.session_state.webrtc_activo = False
+        st.session_state.webrtc_numero = None
+        st.session_state.webrtc_nombre = None
+        
+        # Limpiar cookie
+        try:
+            limpiar_cookie_llamada_activa()
+            print(f"[PERSISTENCE] ✅ Cookie limpiada automáticamente")
+        except Exception as e:
+            print(f"[PERSISTENCE] Error limpiando cookie: {e}")
+        
+        print(f"[PERSISTENCE] ✅ Estado limpiado automáticamente - Llamada terminada detectada")
+    else:
+        print(f"[PERSISTENCE] ✅ Llamada {st.session_state.llamada_activa_sid} realmente está activa, manteniendo estado")
+
 # ✅ SINCRONIZACIÓN INTELIGENTE AL RECARGAR (Evitar sobreescribir cambios locales)
 if st.session_state.agente_id and 'df_contactos' in st.session_state and st.session_state.df_contactos is not None:
     print(f"[SYNC] Verificando si hay cambios locales pendientes antes de recargar contactos...")
@@ -3036,13 +3087,57 @@ with st.sidebar:
         st.error("⚠️ **ESTADO DE LLAMADA DETECTADO**")
         st.caption("El sistema detecta que hay una llamada activa")
         
-        if st.button("🚨 FORZAR LIMPIEZA DE LLAMADA", type="primary"):
-            st.warning("🔄 Limpiando estado de llamada forzadamente...")
+        if st.button("🚨 FORZAR LIMPIEZA COMPLETA", type="primary"):
+            st.warning("🔄 Verificando estado real en Twilio y limpiando forzadamente...")
             
-            # 🔥 LIMPIEZA COMPLETA DE ESTADO
+            # 🔥 VERIFICAR ESTADO REAL EN TWILIO ANTES DE LIMPIAR
+            estado_real_twilio = "desconocido"
+            if st.session_state.llamada_activa_sid:
+                try:
+                    llamada_real = client.calls(st.session_state.llamada_activa_sid).fetch()
+                    estado_real_twilio = llamada_real.status
+                    st.info(f"📞 Estado real en Twilio: {estado_real_twilio}")
+                    
+                    # Si la llamada realmente está terminada, mostrar mensaje específico
+                    if estado_real_twilio in ['completed', 'no-answer', 'busy', 'failed', 'canceled']:
+                        st.success(f"✅ Confirmed: La llamada ya está terminada en Twilio ({estado_real_twilio})")
+                        st.info("🔧 Limpiando estado local atascado...")
+                    else:
+                        st.warning(f"⚠️ La llamada aún está activa en Twilio ({estado_real_twilio})")
+                        st.info("🔧 Forzando finalización y limpieza...")
+                        
+                        # Intentar finalizar la llamada en Twilio si está activa
+                        try:
+                            client.calls(st.session_state.llamada_activa_sid).update(status='completed')
+                            st.success("✅ Llamada finalizada en Twilio")
+                        except Exception as e:
+                            st.error(f"❌ Error finalizando llamada en Twilio: {e}")
+                            
+                except Exception as e:
+                    st.error(f"❌ Error verificando estado en Twilio: {e}")
+                    st.info("🔧 Procediendo con limpieza local forzada...")
+            
+            # 🔥 LIMPIEZA COMPLETA DE ESTADO LOCAL
+            st.warning("🧹 Limpiando todas las variables de sesión...")
+            
+            # Guardar variables actuales para log
+            variables_limpiar = {
+                'llamada_activa_sid': st.session_state.llamada_activa_sid,
+                'conference_name': st.session_state.conference_name,
+                'webrtc_activo': st.session_state.webrtc_activo,
+                'webrtc_numero': st.session_state.webrtc_numero
+            }
+            
+            # Limpiar todas las variables relacionadas con llamadas
             st.session_state.llamada_activa_sid = None
             st.session_state.conference_name = None
             st.session_state.conference_idx = None
+            st.session_state.t_inicio_dt = None
+            st.session_state.agente_llamando = False
+            st.session_state.agente_llamada_inicio = None
+            st.session_state.agente_conectado = False
+            st.session_state.conference_call_sid = None
+            st.session_state.conference_inicio = None
             st.session_state.webrtc_activo = False
             st.session_state.webrtc_numero = None
             st.session_state.webrtc_nombre = None
@@ -3051,17 +3146,32 @@ with st.sidebar:
             st.session_state.grabacion_pausada = False
             st.session_state.finalizacion_manual_agente = False
             
-            # Limpiar cookie
+            # También limpiar variables del marcador
+            st.session_state.marcador_call_sid = None
+            st.session_state.marcador_datos = {}
+            
+            # Limpiar cookie de persistencia
             try:
                 limpiar_cookie_llamada_activa()
-                st.success("✅ Cookie limpiada")
+                st.success("✅ Cookie de persistencia eliminada")
             except Exception as e:
                 st.error(f"❌ Error limpiando cookie: {e}")
             
-            add_log("FORCE_CLEAR_CALL_STATE", "EMERGENCY")
-            st.success("✅ **ESTADO LIMPIADO EXITOSAMENTE**")
-            st.info("🔄 La página se recargará en 2 segundos...")
-            time.sleep(2)
+            # Log detallado de la limpieza
+            add_log("FORCE_CLEAR_CALL_STATE", "EMERGENCY", {
+                "estado_twilio": estado_real_twilio,
+                "variables_eliminadas": variables_limpiar,
+                "accion": "LIMPIEZA_FORZADA_COMPLETA"
+            })
+            
+            st.success("✅ **LIMPIEZA COMPLETA REALIZADA**")
+            st.info("📋 Resumen de acciones:")
+            st.info(f"   📞 Estado Twilio verificado: {estado_real_twilio}")
+            st.info(f"   🧹 Variables limpiadas: {len(variables_limpiar)}")
+            st.info(f"   🍪 Cookie eliminada: Correctamente")
+            st.info("🔄 La página se recargará en 3 segundos...")
+            
+            time.sleep(3)
             st.rerun()
     else:
         st.success("✅ No hay llamadas activas")
