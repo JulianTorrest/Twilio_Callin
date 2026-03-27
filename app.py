@@ -672,6 +672,138 @@ def asignar_codigo_pais_defecto():
     """
     return "57"
 
+# 🔧 SOLUCIONES PARA ESCENARIOS CRÍTICOS DE CONFERENCE CALL
+
+def verificar_timeout_agente():
+    """
+    Verificar si el agente tardó demasiado en contestar (timeout de 30 segundos)
+    """
+    if st.session_state.get('agente_llamando', False):
+        tiempo_espera = time.time() - st.session_state.agente_llamada_inicio
+        if tiempo_espera > 30:  # 30 segundos de timeout
+            print(f"[DEBUG] Timeout agente: {tiempo_espera}s - Acción automática requerida")
+            return True
+    return False
+
+def finalizar_conference_remoto():
+    """
+    Finalizar conferencia remotamente vía Twilio API
+    Permite al agente colgar la llamada incluso si no está conectado
+    """
+    try:
+        if st.session_state.get('conference_call_sid'):
+            # Usar Twilio API para terminar la conferencia
+            client.conferences(st.session_state.conference_call_sid).update(status='completed')
+            
+            # Guardar datos de la llamada parcial
+            guardar_datos_conference_parcial()
+            
+            # Limpiar estado de conferencia
+            limpiar_estado_conference()
+            
+            st.success("✅ Llamada finalizada correctamente")
+            print(f"[DEBUG] Conferencia {st.session_state.conference_call_sid} finalizada remotamente")
+            
+        else:
+            st.warning("⚠️ No hay conferencia activa para finalizar")
+            
+    except Exception as e:
+        st.error(f"❌ Error finalizando llamada: {e}")
+        print(f"[ERROR] Error finalizando conferencia remota: {e}")
+
+def guardar_datos_conference_parcial():
+    """
+    Guardar datos cuando la conferencia termina parcialmente (agente no conectado)
+    """
+    try:
+        if st.session_state.get('conference_idx') is not None and st.session_state.df_contactos is not None:
+            idx = st.session_state.conference_idx
+            
+            # Actualizar estado local
+            st.session_state.df_contactos.at[idx, 'estado'] = 'No Contesto'
+            st.session_state.df_contactos.at[idx, 'observacion'] = 'Agente no disponible - Usuario esperó'
+            st.session_state.df_contactos.at[idx, 'duracion_seg'] = int(time.time() - st.session_state.conference_inicio)
+            st.session_state.df_contactos.at[idx, 'fecha_llamada'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state.df_contactos.at[idx, 'agente_id'] = st.session_state.agente_id
+            
+            # 🔥 PROTEGER CAMPO codigo_pais
+            if 'codigo_pais' in st.session_state.df_contactos.columns:
+                codigo_pais_actual = st.session_state.df_contactos.at[idx, 'codigo_pais']
+                if pd.isna(codigo_pais_actual) or codigo_pais_actual == '' or codigo_pais_actual is None:
+                    st.session_state.df_contactos.at[idx, 'codigo_pais'] = asignar_codigo_pais_defecto()
+                    print(f"[DEBUG] codigo_pais vacío, asignado '57' por defecto")
+            
+            # Guardar en sheets
+            if update_both_sheets_safe(st.session_state.df_contactos, st.session_state.agente_id, "CONFERENCE_PARCIAL", contact_idx=idx):
+                print(f"[DEBUG] Datos de conferencia parcial guardados exitosamente")
+                add_log(f"CONFERENCE_PARCIAL: Agente no disponible - {idx}", "DATA")
+            else:
+                print(f"[ERROR] Error guardando datos de conferencia parcial")
+                
+    except Exception as e:
+        print(f"[ERROR] Error guardando datos conference parcial: {e}")
+
+def limpiar_estado_conference():
+    """
+    Limpiar todo el estado relacionado con conferencia
+    """
+    st.session_state.llamada_activa_sid = None
+    st.session_state.conference_call_sid = None
+    st.session_state.conference_idx = None
+    st.session_state.conference_inicio = None
+    st.session_state.agente_llamando = False
+    st.session_state.agente_llamada_inicio = None
+    
+    print(f"[DEBUG] Estado de conferencia limpiado completamente")
+
+def mostrar_botones_criticos_conference():
+    """
+    Mostrar botones críticos de control siempre que haya conferencia activa
+    Independientemente de si el agente está conectado o no
+    """
+    if st.session_state.get('conference_call_sid'):
+        st.markdown("#### 🚨 CONTROL CRÍTICO DE CONFERENCIA")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔴 FINALIZAR LLAMADA", key="finalizar_critico", type="primary", help="Finalizar la llamada del usuario"):
+                if st.session_state.get('conference_idx') is not None:
+                    st.warning("⚠️ ¿Está seguro de finalizar la llamada?")
+                    if st.button("🔴 CONFIRMAR FINALIZAR", key="confirmar_finalizar"):
+                        finalizar_conference_remoto()
+                else:
+                    st.error("❌ No se puede finalizar: índice de contacto no disponible")
+        
+        with col2:
+            if st.button("🔄 REINTENTAR AGENTE", key="reintentar_agente", help="Intentar conectar con otro agente"):
+                st.info("🔄 Buscando otro agente disponible...")
+                # Aquí se implementaría la lógica para llamar a otro agente
+                # Por ahora, mostramos mensaje
+                st.warning("⚠️ Función de reintento en desarrollo")
+        
+        with col3:
+            if st.button("📝 AGREGAR NOTA", key="nota_critica", help="Agregar nota sobre la llamada"):
+                # Aquí se mostraría un formulario para agregar notas
+                st.info("📝 Función de notas en desarrollo")
+        
+        # Mostrar información del estado actual
+        st.markdown("#### 📊 Estado Actual")
+        col_info1, col_info2 = st.columns(2)
+        
+        with col_info1:
+            st.metric("📞 Conferencia", "Activa" if st.session_state.conference_call_sid else "Inactiva")
+            if st.session_state.get('conference_inicio'):
+                tiempo_activo = int(time.time() - st.session_state.conference_inicio)
+                st.metric("⏱️ Tiempo activo", f"{tiempo_activo}s")
+        
+        with col_info2:
+            agente_estado = "Conectado" if st.session_state.get('agente_conectado') else "No conectado"
+            st.metric("👤 Agente", agente_estado)
+            if st.session_state.get('agente_llamando'):
+                tiempo_espera = int(time.time() - st.session_state.agente_llamada_inicio)
+                st.metric("⏳ Espera agente", f"{tiempo_espera}s")
+
 def read_sheet(worksheet_name="0"):
     """Lee datos de Google Sheets usando gspread"""
     try:
@@ -3253,6 +3385,14 @@ with tab_marcador:
                 try:
                     llamada_activa = client.calls(st.session_state.llamada_activa_sid).fetch()
                     estado_actual = llamada_activa.status
+                    
+                    # 🔥 VERIFICAR TIMEOUT DE AGENTE
+                    if verificar_timeout_agente():
+                        st.error("🚨 TIMEOUT: El agente no contestó en 30 segundos")
+                        st.warning("🔄 Acción automática: Finalizando llamada...")
+                        finalizar_conference_remoto()
+                        st.stop()
+                        
                 except Exception as e:
                     print(f"[ERROR] Error obteniendo llamada activa: {e}")
                     llamada_activa = None
@@ -3514,6 +3654,9 @@ with tab_marcador:
                         if datos and 'inicio' in datos:
                             st.write(f"**Fecha inicio:** {datos['inicio'].strftime('%Y-%m-%d %H:%M:%S')}")
                         st.write(f"**Tiempo transcurrido:** {tiempo_formateado}")
+                    
+                    # 🔥 BOTONES CRÍTICOS DE CONTROL (SIEMPRE VISIBLES)
+                    mostrar_botones_criticos_conference()
                     
                     # 🔥 ESCENARIOS ESPECIALES - DETECCIÓN
                     if estado_actual == 'no-answer':
@@ -4867,6 +5010,15 @@ with tab_op:
                                     st.session_state.conference_name = conference_name
                                     st.session_state.conference_idx = idx
                                     st.session_state.t_inicio_dt = datetime.now()
+                                    
+                                    # 🔥 INICIALIZAR VARIABLES DE TIMEOUT
+                                    st.session_state.conference_call_sid = call_cliente.sid  # Para control remoto
+                                    st.session_state.conference_inicio = time.time()
+                                    st.session_state.agente_llamando = True
+                                    st.session_state.agente_llamada_inicio = time.time()
+                                    st.session_state.agente_conectado = False
+                                    
+                                    print(f"[DEBUG] Variables de timeout inicializadas")
                                     
                                     # ✅ GUARDAR ESTADO EN COOKIES PARA RECUPERACIÓN
                                     guardar_llamada_activa_en_cookie()
